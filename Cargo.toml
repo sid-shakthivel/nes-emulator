@@ -1,0 +1,10 @@
+[package]
+name = "nes_emulator"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bitflags = "2.6.0"
+lazy_static = "1.4.0"
+sdl2 = "0.34.0"
+rand = "0.8"
