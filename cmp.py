@@ -1,5 +1,7 @@
 custom = open("test.txt")
-correct = open("/Users/siddharth/nes_ebook/code/ch3.4/test.txt")
+correct = open("/Users/siddharth/nes_ebook/code/ch5.1/test.txt")
+
+# Remember to update the correct file
 
 custom_lines = custom.readlines()
 correct_lines = correct.readlines()
@@ -12,14 +14,16 @@ for i in range(len(custom_lines)):
     custom_x = custom_parts[4]
     custom_y = custom_parts[5]
     custom_a = custom_parts[6]
+    custom_flags = custom_parts[7]
 
     correct_parts = correct_lines[i].split()
     correct_opcode = correct_parts[2]
     correct_x = correct_parts[4]
     correct_y = correct_parts[5]
     correct_a = correct_parts[6]
+    correct_flags = correct_parts[7]
 
-    if (custom_opcode != correct_opcode or custom_x != correct_x or custom_y != correct_y or custom_a != correct_a):
+    if (custom_opcode != correct_opcode or custom_x != correct_x or custom_y != correct_y or custom_a != correct_a or custom_flags != correct_flags):
         issue_found = True
 
         print("Issue on line: " , i)
