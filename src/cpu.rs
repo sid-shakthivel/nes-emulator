@@ -28,7 +28,6 @@ pub struct CPU {
     status: StatusFlags,
     cycles: u32,
     memory: [u8; 0xFFFF],
-    condition: bool,
 }
 
 impl CPU {
@@ -46,7 +45,6 @@ impl CPU {
             status: initial_status,
             cycles: 0,
             memory: [0; 0xFFFF],
-            condition: false,
         }
     }
 
@@ -161,24 +159,20 @@ impl CPU {
 
         let opcode_data = &CPU_OPCODES[opcode as usize];
 
-        println!(
-            "{:?} {:?} {:#X} {:#X} {:#X} {:#X} {:#X}",
-            opcode_data.instruction,
-            opcode_data.address_mode,
-            opcode,
-            self.pc,
-            self.reg_x,
-            self.reg_y,
-            self.acc
-        );
+        // println!(
+        //     "{:?} {:?} {:#X} {:#X} {:#X} {:#X} {:#X}",
+        //     opcode_data.instruction,
+        //     opcode_data.address_mode,
+        //     opcode,
+        //     self.pc,
+        //     self.reg_x,
+        //     self.reg_y,
+        //     self.acc
+        // );
 
         self.pc += 1;
 
         let mut update_pc: bool = true;
-
-        if self.condition {
-            panic!("condition met");
-        }
 
         match opcode_data.instruction {
             Instruction::ADC => {
@@ -223,7 +217,7 @@ impl CPU {
                 if !self.status.contains(StatusFlags::CARRY) {
                     assert!(opcode_data.address_mode == AddressMode::Relative);
                     self.pc = self.get_operand_addr(opcode_data.address_mode);
-                    update_pc = false;
+                    // update_pc = false;
                 }
             }
             Instruction::BCS => {
@@ -238,8 +232,8 @@ impl CPU {
                 // If zero is set, branch
                 if self.status.contains(StatusFlags::ZERO) {
                     assert!(opcode_data.address_mode == AddressMode::Relative);
-                    self.pc = self.get_operand_addr(opcode_data.address_mode) + 1;
-                    update_pc = false;
+                    self.pc = self.get_operand_addr(opcode_data.address_mode);
+                    // update_pc = false;
                 }
             }
             Instruction::BIT => {
@@ -256,7 +250,7 @@ impl CPU {
                 if self.status.contains(StatusFlags::NEGATIVE) {
                     assert!(opcode_data.address_mode == AddressMode::Relative);
                     self.pc = self.get_operand_addr(opcode_data.address_mode);
-                    update_pc = false;
+                    // update_pc = false;
                 }
             }
             Instruction::BNE => {
@@ -272,9 +266,6 @@ impl CPU {
                 if !self.status.contains(StatusFlags::NEGATIVE) {
                     assert!(opcode_data.address_mode == AddressMode::Relative);
                     self.pc = self.get_operand_addr(opcode_data.address_mode);
-                    // update_pc = false;
-
-                    // panic!("neg not set?\n");
                 }
             }
             Instruction::BRK => {
@@ -297,7 +288,7 @@ impl CPU {
                 if !self.status.contains(StatusFlags::OVERFLOW) {
                     assert!(opcode_data.address_mode == AddressMode::Relative);
                     self.pc = self.get_operand_addr(opcode_data.address_mode);
-                    update_pc = false;
+                    // update_pc = false;
                 }
             }
             Instruction::BVS => {
@@ -305,7 +296,7 @@ impl CPU {
                 if self.status.contains(StatusFlags::OVERFLOW) {
                     assert!(opcode_data.address_mode == AddressMode::Relative);
                     self.pc = self.get_operand_addr(opcode_data.address_mode);
-                    update_pc = false;
+                    // update_pc = false;
                 }
             }
             Instruction::CLC => {
@@ -339,8 +330,8 @@ impl CPU {
                 let operand = self.get_operand(addr, opcode_data.address_mode);
 
                 self.update_carry_flag(self.reg_x >= operand);
-                self.update_zero_flag((self.reg_x as i8 - operand as i8) as u8);
-                self.update_negative_flag((self.reg_x as i8 - operand as i8) as u8);
+                self.update_zero_flag((self.reg_x.wrapping_sub(operand)) as u8);
+                self.update_negative_flag((self.reg_x.wrapping_sub(operand)) as u8);
             }
             Instruction::CPY => {
                 // Compares y to memory
@@ -348,8 +339,8 @@ impl CPU {
                 let operand = self.get_operand(addr, opcode_data.address_mode);
 
                 self.update_carry_flag(self.reg_y >= operand);
-                self.update_zero_flag((self.reg_y as i8 - operand as i8) as u8);
-                self.update_negative_flag((self.reg_y as i8 - operand as i8) as u8);
+                self.update_zero_flag((self.reg_y.wrapping_sub(operand)) as u8);
+                self.update_negative_flag((self.reg_y.wrapping_sub(operand)) as u8);
             }
             Instruction::DEC => {
                 // Decrement memory
@@ -534,7 +525,6 @@ impl CPU {
             }
             Instruction::STA => {
                 let addr = self.get_operand_addr(opcode_data.address_mode);
-                // println!("Storing at {:#X}", addr);
                 self.write_mem(addr, self.acc);
             }
             Instruction::STX => {

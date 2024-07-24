@@ -18,6 +18,7 @@ use sdl2::EventPump;
 
 mod cpu;
 mod opcodes;
+mod memory;
 
 fn handle_user_input(cpu: &mut CPU, event_pump: &mut EventPump) {
     for event in event_pump.poll_iter() {
