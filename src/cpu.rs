@@ -453,7 +453,7 @@ impl<'a> CPU<'a> {
 
                 self.acc = self.get_operand(addr, opcode_data.address_mode);
 
-                // if self.pc == 0xEE18 {
+                // if self.pc == 0xF2F8 {
                 //     panic!("ok so LDA addr: {:#X} and acc is {:#X}", addr, self.acc);
                 // }
 
@@ -660,20 +660,15 @@ impl<'a> CPU<'a> {
 
                 let carry = self.status.contains(StatusFlags::CARRY) as u8;
 
-                let mut result = carry | (operand << 1);
+                self.update_carry_flag(operand >> 7 == 1);
 
-                self.update_carry_flag(operand & 0b0000_0001 != 0);
+                let mut result = carry | (operand << 1);
 
                 self.write_operand(addr, result, opcode_data.address_mode);
 
-                result = self.acc & result;
-
-                if self.pc == 0xF09A {
-                    self.update_carry_flag(false);
-                }
-
-                self.update_zero_flag(result);
                 self.update_negative_flag(result);
+
+                result = self.acc & result;
 
                 self.acc = result;
             }
@@ -681,6 +676,9 @@ impl<'a> CPU<'a> {
                 let addr = self.get_operand_addr(opcode_data.address_mode);
                 let operand = self.get_operand(addr, opcode_data.address_mode);
                 let mut result = operand >> 1;
+
+                self.write_operand(addr, result, opcode_data.address_mode);
+
                 result ^= self.acc;
 
                 self.update_carry_flag(operand & 0b0000_0001 != 0);
@@ -690,7 +688,31 @@ impl<'a> CPU<'a> {
                 self.acc = result;
             }
             Instruction::RRA => {
-                panic!("Don't want to implement")
+                let addr = self.get_operand_addr(opcode_data.address_mode);
+                let operand = self.get_operand(addr, opcode_data.address_mode);
+
+                let carry = self.status.contains(StatusFlags::CARRY) as u8;
+
+                let ror_result = (operand >> 1) | (carry << 7);
+
+                self.update_carry_flag(operand & 0b0000_0001 != 0);
+
+                self.write_operand(addr, ror_result, opcode_data.address_mode);
+
+                let carry_in = self.status.contains(StatusFlags::CARRY) as u8;
+                let sum = self.acc as u16 + ror_result as u16 + carry_in as u16;
+                let result = sum as u8;
+
+                self.update_carry_flag(sum > 0xFF);
+                self.update_zero_flag(result);
+                self.update_negative_flag(result);
+
+                // Overflow flag is set if the sign bit is incorrect (only relevant in signed arithmetic)
+                self.update_overflow_flag(
+                    ((self.acc ^ result) & (ror_result ^ result) & 0x80) != 0,
+                );
+
+                self.acc = result;
             }
             Instruction::SAX => {
                 let addr = self.get_operand_addr(opcode_data.address_mode);

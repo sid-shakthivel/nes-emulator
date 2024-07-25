@@ -150,14 +150,19 @@ impl Memory {
         match addr {
             RAM_START..=RAM_MIRROR_END => self.ram[(addr & 0x7FF) as usize],
             0x8000..=0xFFFF => self.read_prg_rom(addr),
-            _ => panic!("Error: Unknown Memory Address"),
+            _ => {
+                // panic!("Error: Unknown Memory Address")
+                0
+            }
         }
     }
 
     pub fn write_mem(&mut self, addr: u16, value: u8) {
         match addr {
             RAM_START..=RAM_MIRROR_END => self.ram[(addr) as usize] = value,
-            _ => panic!("Error: Unknown Memory Address"),
+            _ => {
+                // panic!("Error: Unknown Memory Address")
+            }
         }
     }
 
