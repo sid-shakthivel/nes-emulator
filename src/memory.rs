@@ -1,20 +1,20 @@
-use std::os::raw;
+use std::{cell::RefCell, os::raw, rc::Rc};
 
 use bitflags::bitflags;
 
-const PRG_ROM_PAGE_SIZE: usize = 16384;
-const CHR_ROM_PAGE_SIZE: usize = 8192;
+use crate::ppu::PPU;
 
 const RAM_START: u16 = 0x0000;
 const RAM_MIRROR_END: u16 = 0x1fff;
 
 const PRG_ROM_START: u16 = 0x8000;
+const PRG_ROM_END: u16 = 0xffff;
 
-// const PPU_REG_START: u16 = 0x2000;
-// const PPU_REG_MIRROR_END: u16 = 0x3fff;
+const PPU_REG_START: u16 = 0x2008;
+const PPU_REG_MIRROR_END: u16 = 0x3fff;
 
 /*
-    Layers of memory
+    Memory Map
 
     0x0000-0x07ff - 2KB internal RAM
     0x0800-0x1fff - Mirrors of internal RAM
@@ -30,106 +30,15 @@ const PRG_ROM_START: u16 = 0x8000;
 pub struct Memory {
     ram: [u8; 2048],
     prg_rom: Vec<u8>,
-    chr_rom: Vec<u8>,
-}
-
-bitflags! {
-    pub struct ControlByte1: u8
-    {
-        const VERTICAL_MIRRORING      = 0b00000001;
-        const HORIZONTAL_MIRRORING    = 0b00000010;
-        const TRAINER                 = 0b00000100;
-        const FOUR_SCREEN_VRAM        = 0b00001000;
-        const LOWER_ROM_MAPPER        = 0b11110000;
-    }
-
-    pub struct ControlByte2: u8
-    {
-        const FORMAT_1_TYPE           = 0b00000011;
-        const FORMAT_2_TYPE           = 0b00001100;
-        const UPPER_ROM_MAPPER        = 0b11110000;
-    }
-}
-
-#[derive(Debug)]
-pub enum MirroringType {
-    Vertical,
-    Horizontal,
-    FourScreen,
-}
-
-struct ROMHeader {
-    string: [u8; 4],
-    prg_rom_size: u8, // Number of banks (16KB)
-    chr_rom_size: u8, // Number of banks (8KB)
-    control_byte_1: ControlByte1,
-    control_byte_2: ControlByte2,
-    prg_ram_size: u8,
-    reserved: [u8; 5],
-}
-
-impl ROMHeader {
-    fn from_vec(vec: &Vec<u8>) -> ROMHeader {
-        ROMHeader {
-            string: [vec[0], vec[1], vec[2], vec[3]],
-            prg_rom_size: vec[4],
-            chr_rom_size: vec[5],
-            control_byte_1: ControlByte1::from_bits_retain(vec[6]),
-            control_byte_2: ControlByte2::from_bits_retain(vec[7]),
-            prg_ram_size: vec[8],
-            reserved: [vec[9], vec[10], vec[11], vec[12], vec[13]],
-        }
-    }
+    ppu: Rc<RefCell<PPU>>,
 }
 
 impl Memory {
-    pub fn new(raw_data: &Vec<u8>) -> Self {
-        let header = ROMHeader::from_vec(raw_data);
-
-        assert!(header.string == [0x4e, 0x45, 0x53, 0x1a]);
-
-        let mapper = header.control_byte_1.bits() & ControlByte1::LOWER_ROM_MAPPER.bits()
-            | (header.control_byte_2.bits() & ControlByte2::UPPER_ROM_MAPPER.bits());
-
-        let test = (raw_data[7] & 0b1111_0000) | (raw_data[6] >> 4);
-
-        // println!("test: {} mapper: {}", test, mapper);
-
-        let should_skip_trainer = header.control_byte_1.contains(ControlByte1::TRAINER);
-
-        // println!(
-        //     "{:#X} {:#X}",
-        //     header.control_byte_1.bits(),
-        //     header.control_byte_2.bits(),
-        // );
-
-        assert!(!header.control_byte_2.contains(ControlByte2::FORMAT_1_TYPE));
-        assert!(!header.control_byte_2.contains(ControlByte2::FORMAT_2_TYPE));
-
-        let four_screen = header
-            .control_byte_1
-            .contains(ControlByte1::FOUR_SCREEN_VRAM);
-        let vertical_mirroring = header
-            .control_byte_1
-            .contains(ControlByte1::VERTICAL_MIRRORING);
-        let screen_mirroring = match (four_screen, vertical_mirroring) {
-            (true, _) => MirroringType::FourScreen,
-            (false, true) => MirroringType::Vertical,
-            (false, false) => MirroringType::Horizontal,
-        };
-
-        // println!("Mirroring: {:?}", screen_mirroring);
-
-        let prg_rom_size = header.prg_rom_size as usize * PRG_ROM_PAGE_SIZE;
-        let chr_rom_size = header.chr_rom_size as usize * CHR_ROM_PAGE_SIZE;
-
-        let prg_rom_start = 16 + if should_skip_trainer { 512 } else { 0 };
-        let chr_rom_start = prg_rom_start + prg_rom_size;
-
+    pub fn new(prg_rom: Vec<u8>, ppu: Rc<RefCell<PPU>>) -> Self {
         Memory {
             ram: [0; 2048],
-            prg_rom: raw_data[prg_rom_start..(prg_rom_start + prg_rom_size)].to_vec(),
-            chr_rom: raw_data[chr_rom_start..(chr_rom_start + chr_rom_size)].to_vec(),
+            prg_rom,
+            ppu,
         }
     }
 
@@ -149,10 +58,16 @@ impl Memory {
     pub fn read_mem(&self, addr: u16) -> u8 {
         match addr {
             RAM_START..=RAM_MIRROR_END => self.ram[(addr & 0x7FF) as usize],
-            0x8000..=0xFFFF => self.read_prg_rom(addr),
+            0x2000 | 0x2001 | 0x2003 | 0x2005 | 0x2006 | 0x4014 => {
+                panic!("Attempt to read from write-only PPU address {:x}", addr);
+            }
+            0x2002 => self.ppu.borrow_mut().read_status_reg(),
+            0x2004 => self.ppu.borrow_mut().read_oam_data(),
+            0x2007 => self.ppu.borrow_mut().read(),
+            PPU_REG_START..=PPU_REG_MIRROR_END => self.read_mem(addr & 0x2007),
+            PRG_ROM_START..=PRG_ROM_END => self.read_prg_rom(addr),
             _ => {
-                // panic!("Error: Unknown Memory Address")
-                0
+                panic!("Error: Unknown Memory Address {:#X}", addr);
             }
         }
     }
@@ -160,8 +75,18 @@ impl Memory {
     pub fn write_mem(&mut self, addr: u16, value: u8) {
         match addr {
             RAM_START..=RAM_MIRROR_END => self.ram[(addr) as usize] = value,
+            0x2000 => self.ppu.borrow_mut().write_ctrl_reg(value),
+            0x2001 => self.ppu.borrow_mut().write_mask_reg(value),
+            0x2003 => self.ppu.borrow_mut().write_oam_addr(value),
+            0x2004 => self.ppu.borrow_mut().write_oam_data(value),
+            0x2005 => panic!("Error: Emulator does not support scrolling"),
+            0x2006 => self.ppu.borrow_mut().write_addr_reg(value),
+            0x2007 => self.ppu.borrow_mut().write(),
+            // 0x4014 => self.ppu.borrow_mut().write_oam_dma(value),
+            PPU_REG_START..=PPU_REG_MIRROR_END => self.write_mem(addr & 0x2007, value),
+            PRG_ROM_START..=PRG_ROM_END => panic!("Error: PRG_ROM is read only"),
             _ => {
-                // panic!("Error: Unknown Memory Address")
+                panic!("Error: Unknown Memory Address {:#X}", addr);
             }
         }
     }

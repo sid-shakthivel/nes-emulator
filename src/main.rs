@@ -3,8 +3,10 @@
 #[macro_use]
 extern crate lazy_static;
 
+use std::cell::RefCell;
 use std::fs::File;
 use std::io::Read;
+use std::rc::Rc;
 use std::time::Duration;
 
 use memory::Memory;
@@ -22,6 +24,8 @@ use sdl2::EventPump;
 mod cpu;
 mod memory;
 mod opcodes;
+mod ppu;
+mod rom;
 
 fn handle_user_input(cpu: &mut CPU, event_pump: &mut EventPump) {
     for event in event_pump.poll_iter() {
@@ -116,20 +120,24 @@ fn main() {
     //     0x60, 0xa6, 0xff, 0xea, 0xea, 0xca, 0xd0, 0xfb, 0x60,
     // ];
 
-    // Open ROM and get size
     let rom_filename = "nestest.nes";
     let mut rom_file = File::open(&rom_filename).expect("Could not find ROM file");
     let rom_size = std::fs::metadata(&rom_filename)
         .expect("Could not read ROM metadata")
         .len() as usize;
 
-    // Fill into buffer
     let mut rom_data = vec![0; rom_size];
     rom_file
         .read(&mut rom_data)
         .expect("Could not find enough space to read ROM into buffer");
 
-    let mut memory = Memory::new(&rom_data);
+    let rom = rom::ROMHeader::from_vec(&rom_data);
+    let (prg_rom, chr_rom) = rom.verify_and_extract();
+    let mirroring_type = rom.get_mirroring_type();
+
+    let ppu = Rc::new(RefCell::new(ppu::PPU::new(chr_rom, mirroring_type)));
+
+    let mut memory = Memory::new(prg_rom, ppu);
 
     // let sdl_context = sdl2::init().unwrap();
     // let video_subsystem = sdl_context.video().unwrap();

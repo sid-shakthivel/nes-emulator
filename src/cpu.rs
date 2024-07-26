@@ -41,7 +41,7 @@ impl<'a> CPU<'a> {
         initial_status.set(StatusFlags::INTERRUPT_DISABLE, true);
 
         /*
-            For snake, set unused flag to true and interrupt disable to false
+            For snake, remove setting status registers
             and pc is 0x600
         */
 
