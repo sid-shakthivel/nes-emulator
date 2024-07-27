@@ -81,7 +81,7 @@ impl Memory {
             0x2004 => self.ppu.borrow_mut().write_oam_data(value),
             0x2005 => panic!("Error: Emulator does not support scrolling"),
             0x2006 => self.ppu.borrow_mut().write_addr_reg(value),
-            0x2007 => self.ppu.borrow_mut().write(),
+            0x2007 => self.ppu.borrow_mut().write(value),
             // 0x4014 => self.ppu.borrow_mut().write_oam_dma(value),
             PPU_REG_START..=PPU_REG_MIRROR_END => self.write_mem(addr & 0x2007, value),
             PRG_ROM_START..=PRG_ROM_END => panic!("Error: PRG_ROM is read only"),
@@ -89,6 +89,14 @@ impl Memory {
                 panic!("Error: Unknown Memory Address {:#X}", addr);
             }
         }
+    }
+
+    pub fn update_ppu_cycles(&mut self, cycles: u32) {
+        self.ppu.borrow_mut().update_cycles(cycles);
+    }
+
+    pub fn get_nmi(&mut self) -> u8 {
+        self.ppu.borrow_mut().get_nmi()
     }
 
     fn read_prg_rom(&self, mut addr: u16) -> u8 {
