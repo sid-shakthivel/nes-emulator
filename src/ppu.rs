@@ -110,19 +110,21 @@ impl Frame {
         self.pixels[base + 2] = rgb.2;
     }
 
-    pub fn copy_tile(&mut self, chr_rom: &Vec<u8>, bank: usize, tile_number: usize) {
+    pub fn copy_tile(
+        &mut self,
+        chr_rom: &Vec<u8>,
+        bank: usize,
+        tile_number: usize,
+        x: usize,
+        y: usize,
+    ) {
         assert!(bank <= 1);
         let bank = (bank * 0x1000) as usize;
 
         let tile_a_offset = bank + tile_number * 16;
         let tile_b_offset = tile_a_offset + 8;
 
-        println!(
-            "Tile {} at offset {} and {}",
-            tile_number, tile_a_offset, tile_b_offset
-        );
-
-        for i in 0..8 {
+        for i in (0..8) {
             let mut upper_byte = chr_rom[tile_a_offset + i];
             let mut lower_byte = chr_rom[tile_a_offset + i + 8];
 
@@ -132,8 +134,6 @@ impl Frame {
 
                 let color_index = (upper_bit << 1) | lower_bit;
 
-                println!("value: {}", color_index);
-
                 let colour = match color_index {
                     0 => SDL_COLOUR_PALLETE[0x01],
                     1 => SDL_COLOUR_PALLETE[0x23],
@@ -142,31 +142,9 @@ impl Frame {
                     _ => panic!("Error: Unknown color index: {}", color_index),
                 };
 
-                self.set_pixel(j, i, colour);
-            }
-        }
+                let x_offset = 7 - j;
 
-        for i in 8..16 {
-            for j in 0..8 {
-                self.set_pixel(j, i, SDL_COLOUR_PALLETE[0x01]);
-            }
-        }
-
-        for i in 8..16 {
-            for j in 8..16 {
-                self.set_pixel(j, i, SDL_COLOUR_PALLETE[0x23]);
-            }
-        }
-
-        for i in 8..16 {
-            for j in 16..24 {
-                self.set_pixel(j, i, SDL_COLOUR_PALLETE[0x27]);
-            }
-        }
-
-        for i in 8..16 {
-            for j in 24..32 {
-                self.set_pixel(j, i, SDL_COLOUR_PALLETE[0x30]);
+                self.set_pixel(x_offset + x, i + y, colour);
             }
         }
     }
@@ -210,6 +188,10 @@ impl PpuCtrl {
             3 => 0x2C00,
             _ => panic!("Error: Invalid nametable address"),
         }
+    }
+
+    pub fn bg_pt(&self) -> u16 {
+        self.contains(PpuCtrl::BACKGROUND_PATTERN_TABLE) as u16
     }
 
     pub fn generate_nmi(&self) -> bool {
@@ -334,6 +316,37 @@ impl AddrRegister {
     }
 }
 
+// PPUSCROLL
+
+pub struct ScrollRegister {
+    pub scroll_x: u8,
+    pub scroll_y: u8,
+    pub is_high: bool,
+}
+
+impl ScrollRegister {
+    pub fn new() -> Self {
+        ScrollRegister {
+            scroll_x: 0,
+            scroll_y: 0,
+            is_high: false,
+        }
+    }
+
+    pub fn write(&mut self, data: u8) {
+        if !self.is_high {
+            self.scroll_x = data;
+        } else {
+            self.scroll_y = data;
+        }
+        self.is_high = !self.is_high;
+    }
+
+    pub fn reset_latch(&mut self) {
+        self.is_high = false;
+    }
+}
+
 pub struct PPU {
     pub chr_rom: Vec<u8>,
     pub palette_table: [u8; 32],
@@ -344,6 +357,7 @@ pub struct PPU {
     ctrl_reg: PpuCtrl,
     mask_reg: PpuMask,
     status_reg: PpuStatus,
+    scroll_reg: ScrollRegister,
     data_buffer: u8,
     pub oam_addr: u8,
     cycles: u32,
@@ -362,6 +376,7 @@ impl PPU {
             ctrl_reg: PpuCtrl::new(),
             mask_reg: PpuMask::new(),
             status_reg: PpuStatus::new(),
+            scroll_reg: ScrollRegister::new(),
             data_buffer: 0,
             mirroring,
             oam_addr: 0,
@@ -372,7 +387,9 @@ impl PPU {
     }
 
     pub fn get_nmi(&mut self) -> u8 {
-        self.nmi_interrupt
+        let save = self.nmi_interrupt;
+        self.nmi_interrupt = 0;
+        save
     }
 
     fn increment_vram_addr(&mut self) {
@@ -380,10 +397,12 @@ impl PPU {
     }
 
     pub fn write_addr_reg(&mut self, value: u8) {
+        // panic!("write addr register");
         self.addr_reg.update(value);
     }
 
     pub fn write_ctrl_reg(&mut self, value: u8) {
+        // println!("write ctrl register {:b}", value);
         let before_nmi_status = self.ctrl_reg.generate_nmi();
         self.ctrl_reg.update(value);
 
@@ -393,25 +412,37 @@ impl PPU {
     }
 
     pub fn write_mask_reg(&mut self, value: u8) {
+        // println!("write mask register {:b}", value);
         self.mask_reg.update(value);
     }
 
     pub fn write_oam_addr(&mut self, value: u8) {
+        // panic!("write oam addr {}", value);
         self.oam_addr = value;
+    }
+
+    pub fn write_scroll_addr(&mut self, value: u8) {
+        // println!("write scroll addr {:b}", value);
+        self.scroll_reg.write(value);
     }
 
     pub fn read_status_reg(&mut self) -> u8 {
         let data = self.status_reg.get();
         self.addr_reg.reset_is_high();
         self.status_reg.reset_vblank();
+
+        // println!("read status reg {:b}", data);
+
         data
     }
 
     pub fn read_oam_data(&self) -> u8 {
+        panic!("read oam data");
         self.oam_data[self.oam_addr as usize]
     }
 
     pub fn write_oam_data(&mut self, value: u8) {
+        panic!("write oam data");
         self.oam_data[self.oam_addr as usize] = value;
         self.oam_addr = self.oam_addr.wrapping_add(1);
     }
@@ -421,15 +452,15 @@ impl PPU {
             MirroringType::Horizontal => match addr {
                 0x2000..=0x23FF => addr - 0x2000,
                 0x2400..=0x27FF => addr - 0x2400,
-                0x2800..=0x2BFF => addr - 0x2800 + 0x1000,
-                0x2C00..=0x2FFF => addr - 0x2C00 + 0x1000,
+                0x2800..=0x2BFF => addr - 0x2800 + 0x100,
+                0x2C00..=0x2FFF => addr - 0x2C00 + 0x100,
                 _ => panic!("Error: Invalid nametable address"),
             },
             MirroringType::Vertical => match addr {
                 0x2000..=0x23FF => addr - 0x2000,
-                0x2400..=0x27FF => addr - 0x2400 + 0x1000,
+                0x2400..=0x27FF => addr - 0x2400 + 0x100,
                 0x2800..=0x2BFF => addr - 0x2800,
-                0x2C00..=0x2FFF => addr - 0x2C00 + 0x1000,
+                0x2C00..=0x2FFF => addr - 0x2C00 + 0x100,
                 _ => panic!("Error: Invalid nametable address"),
             },
             _ => panic!("Error: Invalid mirroring type"),
@@ -437,6 +468,8 @@ impl PPU {
     }
 
     pub fn read(&mut self) -> u8 {
+        // panic!("reading");
+
         let addr = self.addr_reg.get();
         self.increment_vram_addr();
 
@@ -467,10 +500,16 @@ impl PPU {
     }
 
     pub fn write(&mut self, value: u8) {
+        // panic!("random write");
         let addr = self.addr_reg.get();
 
         match addr {
             0x2000..=0x3eff => {
+                // println!(
+                //     "addr = {:#X} and {:#X}",
+                //     addr,
+                //     self.mirror_nametable_addr(addr)
+                // );
                 self.vram[self.mirror_nametable_addr(addr) as usize] = value;
             }
             0x3f00..=0x3fff => {
@@ -483,7 +522,7 @@ impl PPU {
         self.increment_vram_addr();
     }
 
-    pub fn update_cycles(&mut self, cycles: u32) {
+    pub fn update_cycles(&mut self, cycles: u32) -> bool {
         self.cycles += cycles * 3;
 
         if self.cycles >= 341 {
@@ -505,7 +544,40 @@ impl PPU {
 
                 self.status_reg.set_sprite_zero_hit(false);
                 self.status_reg.reset_vblank();
+
+                return true;
             }
         }
+
+        return false;
+    }
+
+    pub fn render(&self) -> Frame {
+        let bank = self.ctrl_reg.bg_pt() as usize;
+        let nametable_addr = self.ctrl_reg.nametable_addr();
+
+        let mut new_frame = Frame::new();
+
+        let mut is_not_zero = false;
+
+        for i in 0..0x03c0 {
+            let tile_number = self.vram[i] as usize;
+
+            if tile_number != 0 {
+                // println!("tile {}", tile_number);
+                is_not_zero = true;
+            }
+
+            let x = (i % 32) * 8;
+            let y = (i / 32) * 8;
+
+            new_frame.copy_tile(&self.chr_rom, bank, tile_number, x, y);
+        }
+
+        if is_not_zero {
+            // panic!("dinito");
+        }
+
+        new_frame
     }
 }

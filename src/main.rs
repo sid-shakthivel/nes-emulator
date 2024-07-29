@@ -6,6 +6,7 @@ extern crate lazy_static;
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::Read;
+use std::mem;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -31,26 +32,20 @@ mod rom;
 fn main() {
     // Setup ROM
     let rom_filename = "pacman.nes";
-    let mut rom_file = File::open(&rom_filename).expect("Could not find ROM file");
+
+    let mut rom_file = File::open(&rom_filename).expect("Error: Cannot find ROM file");
     let rom_size = std::fs::metadata(&rom_filename)
-        .expect("Could not read ROM metadata")
+        .expect("Error: Cannot read ROM metadata")
         .len() as usize;
 
     let mut rom_data = vec![0; rom_size];
     rom_file
         .read(&mut rom_data)
-        .expect("Could not find enough space to read ROM into buffer");
+        .expect("Cannot find enough space to read ROM into buffer");
 
     let rom = rom::ROMHeader::from_vec(&rom_data);
     let (prg_rom, chr_rom) = rom.verify_and_extract();
     let mirroring_type = rom.get_mirroring_type();
-
-    // Setup emulator components
-    // let ppu = Rc::new(RefCell::new(ppu::PPU::new(chr_rom, mirroring_type)));
-
-    // let mut memory = Memory::new(prg_rom, ppu);
-
-    // let mut cpu = CPU::new(&mut memory);
 
     // Setup SDL
 
@@ -71,14 +66,19 @@ fn main() {
         .create_texture_target(PixelFormatEnum::RGB24, 256, 240)
         .unwrap();
 
-    let mut tile_frame = Frame::new();
-    tile_frame.copy_tile(&chr_rom, 0, 65);
+    // Setup emulator components
+    let ppu = Rc::new(RefCell::new(ppu::PPU::new(chr_rom, mirroring_type)));
 
-    texture.update(None, &tile_frame.pixels, 256 * 3).unwrap();
-    canvas.copy(&texture, None, None).unwrap();
-    canvas.present();
+    let mut memory = Memory::new(prg_rom, ppu, |ppu| {
+        let frame = ppu.render();
 
-    loop {
+        texture.update(None, &frame.pixels, 256 * 3).unwrap();
+
+        canvas.copy(&texture, None, None).unwrap();
+        canvas.present();
+
+        // panic!("dono");
+
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit { .. }
@@ -89,13 +89,31 @@ fn main() {
                 _ => { /* do nothing */ }
             }
         }
-    }
+    });
 
-    // cpu.run_with_callback(move |cpu| {
-    //     if read_screen_state(cpu, &mut screen_state) {
-    //         texture.update(None, &screen_state, 32 * 3).unwrap();
-    //         canvas.copy(&texture, None, None).unwrap();
-    //         canvas.present();
+    let memory_ref = Rc::new(RefCell::new(memory));
+
+    let mut cpu = CPU::new(memory_ref);
+    cpu.reset();
+    cpu.run();
+
+    // let mut tile_frame = Frame::new();
+    // tile_frame.copy_tile(&chr_rom, 0, 65);
+
+    // texture.update(None, &tile_frame.pixels, 256 * 3).unwrap();
+    // canvas.copy(&texture, None, None).unwrap();
+    // canvas.present();
+
+    // loop {
+    //     for event in event_pump.poll_iter() {
+    //         match event {
+    //             Event::Quit { .. }
+    //             | Event::KeyDown {
+    //                 keycode: Some(Keycode::Escape),
+    //                 ..
+    //             } => std::process::exit(0),
+    //             _ => { /* do nothing */ }
+    //         }
     //     }
-    // });
+    // }
 }

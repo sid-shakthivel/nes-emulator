@@ -32,11 +32,11 @@ pub struct CPU<'a> {
     status: StatusFlags,
     cycles: u32,
     memory: [u8; 0xFFFF],
-    memory_unit: &'a mut Memory,
+    memory_unit: Rc<RefCell<Memory<'a>>>,
 }
 
 impl<'a> CPU<'a> {
-    pub fn new(memory_unit: &'a mut Memory) -> Self {
+    pub fn new(memory_unit: Rc<RefCell<Memory<'a>>>) -> Self {
         let mut initial_status = StatusFlags::empty();
         initial_status.set(StatusFlags::UNUSED, true);
         initial_status.set(StatusFlags::INTERRUPT_DISABLE, true);
@@ -44,10 +44,12 @@ impl<'a> CPU<'a> {
         /*
             For snake, remove setting status registers
             and pc is 0x600
+
+            For nestest pc is 0xC000
         */
 
         CPU {
-            pc: 0xC000,
+            pc: 0,
             acc: 0,
             reg_x: 0,
             reg_y: 0,
@@ -57,6 +59,10 @@ impl<'a> CPU<'a> {
             memory: [0; 0xFFFF],
             memory_unit,
         }
+    }
+
+    pub fn reset(&mut self) {
+        self.pc = self.read_mem_u16(0xFFFC);
     }
 
     fn update_operand_cycles(
@@ -123,10 +129,10 @@ impl<'a> CPU<'a> {
             | Instruction::BPL
             | Instruction::BVC
             | Instruction::BVS => {
-                let offset = self.read_mem(self.pc) as i8;
-                let addr = (self.pc as i16).wrapping_add(offset as i16) as u16;
+                let offset = self.read_mem(old_pc) as i8;
+                let addr = (old_pc as i16).wrapping_add(offset as i16) as u16;
 
-                if self.is_new_page(self.pc, addr) {
+                if self.is_new_page(old_pc, addr) {
                     cycles += 2;
                 }
             }
@@ -194,11 +200,11 @@ impl<'a> CPU<'a> {
     }
 
     pub fn read_mem(&self, addr: u16) -> u8 {
-        self.memory_unit.read_mem(addr)
+        self.memory_unit.borrow_mut().read_mem(addr)
     }
 
     pub fn write_mem(&mut self, addr: u16, value: u8) {
-        self.memory_unit.write_mem(addr, value);
+        self.memory_unit.borrow_mut().write_mem(addr, value);
     }
 
     /*
@@ -206,17 +212,17 @@ impl<'a> CPU<'a> {
        0x1234 is stored as 0x34, 0x12
     */
     fn read_mem_u16(&mut self, addr: u16) -> u16 {
-        self.memory_unit.read_mem_u16(addr)
+        self.memory_unit.borrow_mut().read_mem_u16(addr)
     }
 
     fn write_mem_u16(&mut self, addr: u16, data: u16) {
-        self.memory_unit.write_mem_u16(addr, data);
+        self.memory_unit.borrow_mut().write_mem_u16(addr, data);
     }
 
     fn push_stack(&mut self, value: u8) {
         let addr = 0x0100 + self.sp as u16;
         // self.memory[addr as usize] = value;
-        self.memory_unit.write_mem(addr, value);
+        self.memory_unit.borrow_mut().write_mem(addr, value);
 
         self.sp = self.sp.wrapping_sub(1);
     }
@@ -226,7 +232,7 @@ impl<'a> CPU<'a> {
 
         let addr = 0x0100 + self.sp as u16;
         // self.memory[addr as usize]
-        self.memory_unit.read_mem(addr)
+        self.memory_unit.borrow_mut().read_mem(addr)
     }
 
     pub fn load_6502_program(&mut self, program: Vec<u8>) {
@@ -251,34 +257,30 @@ impl<'a> CPU<'a> {
 
         self.update_interrupt_flag(true);
 
-        self.pc = (self.read_mem(0xFFFF) as u16) << 8 | (self.read_mem(0xFFFE) as u16);
-
+        // self.pc = (self.read_mem(0xFFFF) as u16) << 8 | (self.read_mem(0xFFFE) as u16);
         self.cycles += 2;
-        self.memory_unit.update_ppu_cycles(2);
+        self.memory_unit.borrow_mut().update_ppu_cycles(2);
+
+        self.pc = self.read_mem_u16(0xFFFA);
     }
 
-    pub fn run_with_callback<F>(&mut self, mut callback: F)
-    where
-        F: FnMut(&mut CPU),
-    {
+    pub fn run(&mut self) {
         loop {
-            if self.memory_unit.get_nmi() == 1 {
-                // NMI
+            if self.memory_unit.borrow_mut().get_nmi() == 1 {
+                self.nmi();
             }
-
-            callback(self);
 
             self.interpret();
         }
     }
 
     pub fn interpret(&mut self) {
-        let opcode = self.memory_unit.read_mem(self.pc);
+        let opcode = self.memory_unit.borrow_mut().read_mem(self.pc);
 
         let opcode_data = &CPU_OPCODES[opcode as usize];
 
         println!(
-            "{:?} {:?} {:#X} {:#X} {:#X} {:#X} {:#X} {:#X}",
+            "{:?} {:?} {:#X} {:#X} {:#X} {:#X} {:#X} {:#X} {}",
             opcode_data.instruction,
             opcode_data.address_mode,
             opcode,
@@ -287,7 +289,12 @@ impl<'a> CPU<'a> {
             self.reg_y,
             self.acc,
             self.status.bits(),
+            self.cycles
         );
+
+        // if self.cycles >= 119120 {
+        //     panic!("have reached a point of difference");
+        // }
 
         self.pc += 1;
 
@@ -559,10 +566,6 @@ impl<'a> CPU<'a> {
                 let mut addr = self.get_operand_addr(opcode_data);
 
                 self.acc = self.get_operand(addr, opcode_data.address_mode);
-
-                // if self.pc == 0xF2F8 {
-                //     panic!("ok so LDA addr: {:#X} and acc is {:#X}", addr, self.acc);
-                // }
 
                 self.update_negative_flag(self.acc);
                 self.update_zero_flag(self.acc);
@@ -878,11 +881,13 @@ impl<'a> CPU<'a> {
             + opcode_data.cycles as u32;
 
         if update_pc {
-            self.pc += opcode_data.bytes as u16 - 1;
+            self.pc += (opcode_data.bytes as u16 - 1);
         }
 
         self.cycles += updated_cycles;
-        self.memory_unit.update_ppu_cycles(updated_cycles);
+        self.memory_unit
+            .borrow_mut()
+            .update_ppu_cycles(updated_cycles);
     }
 
     fn get_operand(&mut self, addr: u16, address_mode: AddressMode) -> u8 {

@@ -27,18 +27,23 @@ const PPU_REG_MIRROR_END: u16 = 0x3fff;
     0x8000-0xffff - PRG ROM
 */
 
-pub struct Memory {
+pub struct Memory<'call> {
     ram: [u8; 2048],
     prg_rom: Vec<u8>,
     ppu: Rc<RefCell<PPU>>,
+    callback: Box<dyn FnMut(&PPU) + 'call>,
 }
 
-impl Memory {
-    pub fn new(prg_rom: Vec<u8>, ppu: Rc<RefCell<PPU>>) -> Self {
+impl<'a> Memory<'a> {
+    pub fn new<'call, F>(prg_rom: Vec<u8>, ppu: Rc<RefCell<PPU>>, callback: F) -> Memory<'call>
+    where
+        F: FnMut(&PPU) + 'call,
+    {
         Memory {
             ram: [0; 2048],
             prg_rom,
             ppu,
+            callback: Box::new(callback),
         }
     }
 
@@ -66,6 +71,18 @@ impl Memory {
             0x2007 => self.ppu.borrow_mut().read(),
             PPU_REG_START..=PPU_REG_MIRROR_END => self.read_mem(addr & 0x2007),
             PRG_ROM_START..=PRG_ROM_END => self.read_prg_rom(addr),
+            0x4000..=0x4013 | 0x4015 => {
+                //ignore APU
+                0
+            }
+            0x4016 => {
+                // ignore joypad 1;
+                0
+            }
+            0x4017 => {
+                // ignore joypad 2
+                0
+            }
             _ => {
                 panic!("Error: Unknown Memory Address {:#X}", addr);
             }
@@ -79,10 +96,26 @@ impl Memory {
             0x2001 => self.ppu.borrow_mut().write_mask_reg(value),
             0x2003 => self.ppu.borrow_mut().write_oam_addr(value),
             0x2004 => self.ppu.borrow_mut().write_oam_data(value),
-            0x2005 => panic!("Error: Emulator does not support scrolling"),
+            0x2005 => self.ppu.borrow_mut().write_scroll_addr(value),
             0x2006 => self.ppu.borrow_mut().write_addr_reg(value),
             0x2007 => self.ppu.borrow_mut().write(value),
-            // 0x4014 => self.ppu.borrow_mut().write_oam_dma(value),
+            0x4014 => {
+                let mut buffer: [u8; 256] = [0; 256];
+                let hi: u16 = (value as u16) << 8;
+                for i in 0..256u16 {
+                    buffer[i as usize] = self.read_mem(hi + i);
+                }
+                self.ppu.borrow_mut().write_oam_dma(&buffer);
+            }
+            0x4000..=0x4013 | 0x4015 => {
+                //ignore APU
+            }
+            0x4016 => {
+                // ignore joypad 1;
+            }
+            0x4017 => {
+                // ignore joypad 2
+            }
             PPU_REG_START..=PPU_REG_MIRROR_END => self.write_mem(addr & 0x2007, value),
             PRG_ROM_START..=PRG_ROM_END => panic!("Error: PRG_ROM is read only"),
             _ => {
@@ -92,7 +125,17 @@ impl Memory {
     }
 
     pub fn update_ppu_cycles(&mut self, cycles: u32) {
-        self.ppu.borrow_mut().update_cycles(cycles);
+        // let nmi_before = self.ppu.borrow_mut().get_nmi();
+        // let nmi_after = self.ppu.borrow_mut().get_nmi();
+
+        if self.ppu.borrow_mut().update_cycles(cycles) {
+            (self.callback)(&mut *self.ppu.borrow_mut());
+        }
+
+        // if nmi_before == 0 && nmi_after == 1 {
+        //     // Render
+        //     (self.callback)(&mut *self.ppu.borrow_mut());
+        // }
     }
 
     pub fn get_nmi(&mut self) -> u8 {
