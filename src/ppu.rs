@@ -660,7 +660,9 @@ impl PPU {
 
     pub fn render(&self) -> Frame {
         let mut bank = self.ctrl_reg.bg_pt() as usize;
-        let nametable_addr = self.ctrl_reg.nametable_addr();
+        let nametable_addr = self.mirror_nametable_addr(self.ctrl_reg.nametable_addr());
+
+        // println!("{:#X}", nametable_addr);
 
         // if nametable_addr != 0x2000 {
         //     panic!("nametable_addr = {:#X}", nametable_addr);

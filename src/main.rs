@@ -23,6 +23,7 @@ use sdl2::pixels::Color;
 use sdl2::pixels::PixelFormatEnum;
 use sdl2::EventPump;
 
+mod controller;
 mod cpu;
 mod memory;
 mod opcodes;
@@ -31,7 +32,7 @@ mod rom;
 
 fn main() {
     // Setup ROM
-    let rom_filename = "pacman.nes";
+    let rom_filename = "dk.nes";
 
     let mut rom_file = File::open(&rom_filename).expect("Error: Cannot find ROM file");
     let rom_size = std::fs::metadata(&rom_filename)
@@ -69,7 +70,9 @@ fn main() {
     // Setup emulator components
     let ppu = Rc::new(RefCell::new(ppu::PPU::new(chr_rom, mirroring_type)));
 
-    let mut memory = Memory::new(prg_rom, ppu, |ppu| {
+    let controller_a = Rc::new(RefCell::new(controller::Controller::new()));
+
+    let mut memory = Memory::new(prg_rom, ppu, controller_a, |ppu, controller| {
         let frame = ppu.render();
 
         texture.update(None, &frame.pixels, 256 * 3).unwrap();
@@ -79,6 +82,8 @@ fn main() {
 
         // panic!("dono");
 
+        let test = Keycode::A;
+
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit { .. }
@@ -86,6 +91,17 @@ fn main() {
                     keycode: Some(Keycode::Escape),
                     ..
                 } => std::process::exit(0),
+
+                Event::KeyDown { keycode, .. } => {
+                    if let Some(key) = keycode {
+                        controller.set_controller_key(key, true);
+                    }
+                }
+                Event::KeyUp { keycode, .. } => {
+                    if let Some(key) = keycode {
+                        controller.set_controller_key(key, false);
+                    }
+                }
                 _ => { /* do nothing */ }
             }
         }

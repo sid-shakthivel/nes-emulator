@@ -2,7 +2,7 @@ use std::{cell::RefCell, os::raw, rc::Rc};
 
 use bitflags::bitflags;
 
-use crate::ppu::PPU;
+use crate::{controller::Controller, ppu::PPU};
 
 const RAM_START: u16 = 0x0000;
 const RAM_MIRROR_END: u16 = 0x1fff;
@@ -31,18 +31,25 @@ pub struct Memory<'call> {
     ram: [u8; 2048],
     prg_rom: Vec<u8>,
     ppu: Rc<RefCell<PPU>>,
-    callback: Box<dyn FnMut(&PPU) + 'call>,
+    controller_a: Rc<RefCell<Controller>>,
+    callback: Box<dyn FnMut(&mut PPU, &mut Controller) + 'call>,
 }
 
 impl<'a> Memory<'a> {
-    pub fn new<'call, F>(prg_rom: Vec<u8>, ppu: Rc<RefCell<PPU>>, callback: F) -> Memory<'call>
+    pub fn new<'call, F>(
+        prg_rom: Vec<u8>,
+        ppu: Rc<RefCell<PPU>>,
+        controller_a: Rc<RefCell<Controller>>,
+        callback: F,
+    ) -> Memory<'call>
     where
-        F: FnMut(&PPU) + 'call,
+        F: FnMut(&mut PPU, &mut Controller) + 'call,
     {
         Memory {
             ram: [0; 2048],
             prg_rom,
             ppu,
+            controller_a,
             callback: Box::new(callback),
         }
     }
@@ -75,10 +82,7 @@ impl<'a> Memory<'a> {
                 //ignore APU
                 0
             }
-            0x4016 => {
-                // ignore joypad 1;
-                0
-            }
+            0x4016 => self.controller_a.borrow_mut().read(),
             0x4017 => {
                 // ignore joypad 2
                 0
@@ -110,9 +114,7 @@ impl<'a> Memory<'a> {
             0x4000..=0x4013 | 0x4015 => {
                 //ignore APU
             }
-            0x4016 => {
-                // ignore joypad 1;
-            }
+            0x4016 => self.controller_a.borrow_mut().write(value),
             0x4017 => {
                 // ignore joypad 2
             }
@@ -129,7 +131,10 @@ impl<'a> Memory<'a> {
         // let nmi_after = self.ppu.borrow_mut().get_nmi();
 
         if self.ppu.borrow_mut().update_cycles(cycles) {
-            (self.callback)(&mut *self.ppu.borrow_mut());
+            (self.callback)(
+                &mut *self.ppu.borrow_mut(),
+                &mut *self.controller_a.borrow_mut(),
+            );
         }
 
         // if nmi_before == 0 && nmi_after == 1 {
