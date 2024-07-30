@@ -96,24 +96,4 @@ fn main() {
     let mut cpu = CPU::new(memory_ref);
     cpu.reset();
     cpu.run();
-
-    // let mut tile_frame = Frame::new();
-    // tile_frame.copy_tile(&chr_rom, 0, 65);
-
-    // texture.update(None, &tile_frame.pixels, 256 * 3).unwrap();
-    // canvas.copy(&texture, None, None).unwrap();
-    // canvas.present();
-
-    // loop {
-    //     for event in event_pump.poll_iter() {
-    //         match event {
-    //             Event::Quit { .. }
-    //             | Event::KeyDown {
-    //                 keycode: Some(Keycode::Escape),
-    //                 ..
-    //             } => std::process::exit(0),
-    //             _ => { /* do nothing */ }
-    //         }
-    //     }
-    // }
 }

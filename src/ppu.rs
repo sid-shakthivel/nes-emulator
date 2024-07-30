@@ -88,35 +88,40 @@ pub static SDL_COLOUR_PALLETE: [(u8, u8, u8); 64] = [
 
 pub struct Frame {
     pub pixels: Vec<u8>,
+    chr_rom: Vec<u8>,
 }
 
 impl Frame {
     const WIDTH: usize = 256;
     const HIGHT: usize = 240;
 
-    pub fn new() -> Self {
+    pub fn new(chr_rom: &Vec<u8>) -> Self {
         Frame {
             pixels: vec![0; (Frame::WIDTH) * (Frame::HIGHT) * 3],
+            chr_rom: chr_rom.to_vec(),
         }
     }
 
-    pub fn set_pixel(&mut self, x: usize, y: usize, rgb: (u8, u8, u8)) {
+    fn set_pixel(&mut self, x: usize, y: usize, rgb: (u8, u8, u8)) {
         let base = y * 3 * Frame::WIDTH + x * 3;
 
-        assert!(base + 2 < self.pixels.len());
+        // assert!(base + 2 < self.pixels.len());
+
+        if base + 2 > self.pixels.len() {
+            return;
+        }
 
         self.pixels[base] = rgb.0;
         self.pixels[base + 1] = rgb.1;
         self.pixels[base + 2] = rgb.2;
     }
 
-    pub fn copy_tile(
+    pub fn copy_bg_tile(
         &mut self,
-        chr_rom: &Vec<u8>,
         bank: usize,
         tile_number: usize,
-        x: usize,
-        y: usize,
+        tile_coords: (usize, usize),
+        palette: &[u8; 4],
     ) {
         assert!(bank <= 1);
         let bank = (bank * 0x1000) as usize;
@@ -124,27 +129,78 @@ impl Frame {
         let tile_a_offset = bank + tile_number * 16;
         let tile_b_offset = tile_a_offset + 8;
 
-        for i in (0..8) {
-            let mut upper_byte = chr_rom[tile_a_offset + i];
-            let mut lower_byte = chr_rom[tile_a_offset + i + 8];
+        let (tile_x, tile_y) = tile_coords;
 
-            for j in (0..8).rev() {
+        for i in (0..8) {
+            let mut upper_byte = self.chr_rom[tile_a_offset + i];
+            let mut lower_byte = self.chr_rom[tile_a_offset + i + 8];
+
+            for j in (0..8) {
                 let upper_bit = (upper_byte >> j) & 1;
                 let lower_bit = (lower_byte >> j) & 1;
 
-                let color_index = (upper_bit << 1) | lower_bit;
+                let color_index = ((1 & lower_bit) << 1) | (upper_bit & 1);
 
                 let colour = match color_index {
-                    0 => SDL_COLOUR_PALLETE[0x01],
-                    1 => SDL_COLOUR_PALLETE[0x23],
-                    2 => SDL_COLOUR_PALLETE[0x27],
-                    3 => SDL_COLOUR_PALLETE[0x30],
+                    0 => SDL_COLOUR_PALLETE[palette[0] as usize],
+                    1 => SDL_COLOUR_PALLETE[palette[1] as usize],
+                    2 => SDL_COLOUR_PALLETE[palette[2] as usize],
+                    3 => SDL_COLOUR_PALLETE[palette[3] as usize],
                     _ => panic!("Error: Unknown color index: {}", color_index),
                 };
 
                 let x_offset = 7 - j;
 
-                self.set_pixel(x_offset + x, i + y, colour);
+                self.set_pixel(x_offset + tile_x, i + tile_y, colour);
+            }
+        }
+    }
+
+    pub fn copy_sprite_tile(
+        &mut self,
+        bank: usize,
+        tile_number: usize,
+        tile_coords: (usize, usize),
+        tile_mods: (bool, bool),
+        palette: &[u8; 4],
+    ) {
+        assert!(bank <= 1);
+        let bank = (bank * 0x1000) as usize;
+
+        let tile_a_offset = bank + tile_number * 16;
+        let tile_b_offset = tile_a_offset + 8;
+
+        let (tile_x, tile_y) = tile_coords;
+        let (flip_horizontal, flip_vertical) = tile_mods;
+
+        for i in (0..8) {
+            let mut upper_byte = self.chr_rom[tile_a_offset + i];
+            let mut lower_byte = self.chr_rom[tile_a_offset + i + 8];
+
+            for j in (0..8) {
+                let upper_bit = (upper_byte >> j) & 1;
+                let lower_bit = (lower_byte >> j) & 1;
+
+                let color_index = ((1 & lower_bit) << 1) | (upper_bit & 1);
+
+                let colour = match color_index {
+                    0 => SDL_COLOUR_PALLETE[palette[0] as usize],
+                    1 => SDL_COLOUR_PALLETE[palette[1] as usize],
+                    2 => SDL_COLOUR_PALLETE[palette[2] as usize],
+                    3 => SDL_COLOUR_PALLETE[palette[3] as usize],
+                    _ => panic!("Error: Unknown color index: {}", color_index),
+                };
+
+                let x_offset = 7 - j;
+
+                match (flip_horizontal, flip_vertical) {
+                    (false, false) => self.set_pixel(tile_x + x_offset, tile_y + i, colour),
+                    (true, false) => self.set_pixel(tile_x + 7 - x_offset, tile_y + i, colour),
+                    (false, true) => self.set_pixel(tile_x + x_offset, tile_y + 7 - i, colour),
+                    (true, true) => self.set_pixel(tile_x + 7 - x_offset, tile_y + 7 - i, colour),
+                }
+
+                // self.set_pixel(x_offset + tile_x, i + tile_y, colour);
             }
         }
     }
@@ -192,6 +248,14 @@ impl PpuCtrl {
 
     pub fn bg_pt(&self) -> u16 {
         self.contains(PpuCtrl::BACKGROUND_PATTERN_TABLE) as u16
+    }
+
+    pub fn sprite_pt(&self) -> u16 {
+        self.contains(PpuCtrl::SPRITE_PATTERN_TABLE) as u16
+    }
+
+    pub fn sprite_size(&self) -> u16 {
+        self.contains(PpuCtrl::SPRITE_PATTERN_TABLE) as u16
     }
 
     pub fn generate_nmi(&self) -> bool {
@@ -344,6 +408,16 @@ impl ScrollRegister {
 
     pub fn reset_latch(&mut self) {
         self.is_high = false;
+    }
+}
+
+bitflags! {
+    pub struct SpriteAttributes: u8 {
+        const PALETTE =     0b00000011;
+        const UNUSED =      0b00011100;
+        const PRIORITY =    0b00100000;
+        const FLIP_HORIZONTAL = 0b01000000;
+        const FLIP_VERTICAL = 0b10000000;
     }
 }
 
@@ -513,8 +587,9 @@ impl PPU {
                 self.vram[self.mirror_nametable_addr(addr) as usize] = value;
             }
             0x3f00..=0x3fff => {
-                let addr = addr - 0x3f00;
-                self.palette_table[addr as usize] = value;
+                let offset = addr - 0x3f00;
+                // println!("palette stuff {} {}", offset, value);
+                self.palette_table[offset as usize] = value;
             }
             _ => panic!("Error: Unknown Memory Address"),
         }
@@ -552,14 +627,50 @@ impl PPU {
         return false;
     }
 
+    fn bg_palette(&self, tile_col: usize, tile_row: usize) -> [u8; 4] {
+        let attr_table_index = tile_row / 4 * 8 + tile_col / 4;
+        let attr_byte = self.vram[0x3c0 + attr_table_index];
+
+        let quadrant_row = (tile_row % 4) / 2;
+        let quadrant_col = (tile_col % 4) / 2;
+
+        let shift_amount = (quadrant_row * 2 + quadrant_col) * 2;
+
+        let palette_index = (attr_byte >> shift_amount) & 0b11;
+
+        let palette_start: usize = 1 + (palette_index as usize) * 4;
+
+        [
+            self.palette_table[0],
+            self.palette_table[palette_start],
+            self.palette_table[palette_start + 1],
+            self.palette_table[palette_start + 2],
+        ]
+    }
+
+    fn sprite_palette(&self, pallete_index: u8) -> [u8; 4] {
+        let start = 0x11 + (pallete_index * 4) as usize;
+        [
+            self.palette_table[0],
+            self.palette_table[start],
+            self.palette_table[start + 1],
+            self.palette_table[start + 2],
+        ]
+    }
+
     pub fn render(&self) -> Frame {
-        let bank = self.ctrl_reg.bg_pt() as usize;
+        let mut bank = self.ctrl_reg.bg_pt() as usize;
         let nametable_addr = self.ctrl_reg.nametable_addr();
 
-        let mut new_frame = Frame::new();
+        // if nametable_addr != 0x2000 {
+        //     panic!("nametable_addr = {:#X}", nametable_addr);
+        // }
+
+        let mut new_frame = Frame::new(&self.chr_rom);
 
         let mut is_not_zero = false;
 
+        // Handle rendering background tiles
         for i in 0..0x03c0 {
             let tile_number = self.vram[i] as usize;
 
@@ -568,14 +679,43 @@ impl PPU {
                 is_not_zero = true;
             }
 
-            let x = (i % 32) * 8;
-            let y = (i / 32) * 8;
+            let x = i % 32;
+            let y = i / 32;
 
-            new_frame.copy_tile(&self.chr_rom, bank, tile_number, x, y);
+            let palette = self.bg_palette(x, y);
+
+            new_frame.copy_bg_tile(bank, tile_number, (x * 8, y * 8), &palette);
         }
 
         if is_not_zero {
             // panic!("dinito");
+        }
+
+        // Handle rendering sprites
+
+        // assert!(self.ctrl_reg.sprite_size() == 0);
+
+        bank = self.ctrl_reg.sprite_pt() as usize;
+
+        for i in 0..64 {
+            let y_pos: usize = self.oam_data[i * 4 + 0] as usize + 1;
+            let tile_number = self.oam_data[i * 4 + 1] as usize;
+            let attributes = SpriteAttributes::from_bits_retain(self.oam_data[i * 4 + 2]);
+            let x_pos = self.oam_data[i * 4 + 3] as usize;
+
+            let palette_index = (attributes.bits()) & 0b11;
+
+            let palette = self.sprite_palette(palette_index);
+            let flip_horizonal = attributes.contains(SpriteAttributes::FLIP_HORIZONTAL);
+            let flip_vertical = attributes.contains(SpriteAttributes::FLIP_VERTICAL);
+
+            new_frame.copy_sprite_tile(
+                bank,
+                tile_number,
+                (x_pos, y_pos),
+                (flip_horizonal, flip_vertical),
+                &palette,
+            );
         }
 
         new_frame

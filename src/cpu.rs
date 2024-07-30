@@ -95,7 +95,7 @@ impl<'a> CPU<'a> {
                     let upd_addr = addr.wrapping_add(self.reg_x as u16);
 
                     if self.is_new_page(upd_addr, addr) {
-                        cycles += 2;
+                        cycles += 1;
                     }
                 }
                 AddressMode::AbsoluteY => {
@@ -103,7 +103,7 @@ impl<'a> CPU<'a> {
                     let upd_addr = addr.wrapping_add(self.reg_y as u16);
 
                     if self.is_new_page(upd_addr, addr) {
-                        cycles += 2;
+                        cycles += 1;
                     }
                 }
                 AddressMode::IndirectY => {
@@ -116,7 +116,7 @@ impl<'a> CPU<'a> {
                     let deref_addr = deref_base.wrapping_add(self.reg_y as u16);
 
                     if self.is_new_page(deref_addr, deref_base) {
-                        cycles += 2;
+                        cycles += 1;
                     }
                 }
                 _ => {}
@@ -133,7 +133,7 @@ impl<'a> CPU<'a> {
                 let addr = (old_pc as i16).wrapping_add(offset as i16) as u16;
 
                 if self.is_new_page(old_pc, addr) {
-                    cycles += 2;
+                    cycles += 1;
                 }
             }
             _ => {}
@@ -279,18 +279,18 @@ impl<'a> CPU<'a> {
 
         let opcode_data = &CPU_OPCODES[opcode as usize];
 
-        println!(
-            "{:?} {:?} {:#X} {:#X} {:#X} {:#X} {:#X} {:#X} {}",
-            opcode_data.instruction,
-            opcode_data.address_mode,
-            opcode,
-            self.pc,
-            self.reg_x,
-            self.reg_y,
-            self.acc,
-            self.status.bits(),
-            self.cycles
-        );
+        // println!(
+        //     "{:?} {:?} {:#X} {:#X} {:#X} {:#X} {:#X} {:#X} {}",
+        //     opcode_data.instruction,
+        //     opcode_data.address_mode,
+        //     opcode,
+        //     self.pc,
+        //     self.reg_x,
+        //     self.reg_y,
+        //     self.acc,
+        //     self.status.bits(),
+        //     self.cycles
+        // );
 
         // if self.cycles >= 119120 {
         //     panic!("have reached a point of difference");

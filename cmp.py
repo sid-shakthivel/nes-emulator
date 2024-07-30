@@ -25,7 +25,7 @@ for i in range(len(custom_lines)):
     correct_flags = correct_parts[7]
     correct_cycles = correct_parts[8]
 
-    if (custom_opcode != correct_opcode or custom_x != correct_x or custom_y != correct_y or custom_a != correct_a or custom_flags != correct_flags or custom_cycles != correct_cycles):
+    if (custom_opcode != correct_opcode or custom_x != correct_x or custom_y != correct_y or custom_a != correct_a or custom_cycles != correct_cycles or custom_flags != correct_flags):
         issue_found = True
 
         print("Issue on line: " , i)
