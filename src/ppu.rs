@@ -135,19 +135,13 @@ impl Frame {
             let mut upper_byte = self.chr_rom[tile_a_offset + i];
             let mut lower_byte = self.chr_rom[tile_a_offset + i + 8];
 
-            for j in (0..8) {
+            for j in (0..8).rev() {
                 let upper_bit = (upper_byte >> j) & 1;
                 let lower_bit = (lower_byte >> j) & 1;
 
-                let color_index = ((1 & lower_bit) << 1) | (upper_bit & 1);
+                let colour_index = ((1 & lower_bit) << 1) | (upper_bit & 1);
 
-                let colour = match color_index {
-                    0 => SDL_COLOUR_PALLETE[palette[0] as usize],
-                    1 => SDL_COLOUR_PALLETE[palette[1] as usize],
-                    2 => SDL_COLOUR_PALLETE[palette[2] as usize],
-                    3 => SDL_COLOUR_PALLETE[palette[3] as usize],
-                    _ => panic!("Error: Unknown color index: {}", color_index),
-                };
+                let colour = SDL_COLOUR_PALLETE[palette[colour_index as usize] as usize];
 
                 let x_offset = 7 - j;
 
@@ -181,15 +175,9 @@ impl Frame {
                 let upper_bit = (upper_byte >> j) & 1;
                 let lower_bit = (lower_byte >> j) & 1;
 
-                let color_index = ((1 & lower_bit) << 1) | (upper_bit & 1);
+                let colour_index = ((1 & lower_bit) << 1) | (upper_bit & 1);
 
-                let colour = match color_index {
-                    0 => SDL_COLOUR_PALLETE[palette[0] as usize],
-                    1 => SDL_COLOUR_PALLETE[palette[1] as usize],
-                    2 => SDL_COLOUR_PALLETE[palette[2] as usize],
-                    3 => SDL_COLOUR_PALLETE[palette[3] as usize],
-                    _ => panic!("Error: Unknown color index: {}", color_index),
-                };
+                let colour = SDL_COLOUR_PALLETE[palette[colour_index as usize] as usize];
 
                 let x_offset = 7 - j;
 
@@ -199,8 +187,6 @@ impl Frame {
                     (false, true) => self.set_pixel(tile_x + x_offset, tile_y + 7 - i, colour),
                     (true, true) => self.set_pixel(tile_x + 7 - x_offset, tile_y + 7 - i, colour),
                 }
-
-                // self.set_pixel(x_offset + tile_x, i + tile_y, colour);
             }
         }
     }
@@ -326,7 +312,7 @@ impl PpuStatus {
 struct AddrRegister {
     low_byte: u8,
     high_byte: u8,
-    is_high: bool,
+    pub is_high: bool,
     mask: u16,
 }
 
@@ -352,18 +338,20 @@ impl AddrRegister {
             }
         }
 
-        self.set(self.mask());
+        // self.set(self.mask());
     }
 
     pub fn increment(&mut self, value: u8) {
-        let value = self.get();
-        self.set(value.wrapping_add(1));
-        self.set(self.mask());
+        let lo = self.low_byte;
+        self.low_byte = self.low_byte.wrapping_add(value);
+        if lo > self.low_byte {
+            self.high_byte = self.high_byte.wrapping_add(1);
+        }
     }
 
     pub fn set(&mut self, value: u16) {
         self.low_byte = (value & 0xFF) as u8;
-        self.high_byte = ((value >> 8) & 0xFF) as u8;
+        self.high_byte = (value >> 8) as u8;
     }
 
     // Method used to mask address to maximum of 0x3FFF
@@ -472,7 +460,15 @@ impl PPU {
 
     pub fn write_addr_reg(&mut self, value: u8) {
         // panic!("write addr register");
+        let old = self.addr_reg.get().wrapping_sub(0x2000);
         self.addr_reg.update(value);
+        // println!(
+        //     "{:#X} {:#X} {:#X} {}",
+        //     self.addr_reg.get() - 0x2000,
+        //     value,
+        //     old,
+        //     self.addr_reg.is_high
+        // );
     }
 
     pub fn write_ctrl_reg(&mut self, value: u8) {
@@ -580,11 +576,14 @@ impl PPU {
         match addr {
             0x2000..=0x3eff => {
                 // println!(
-                //     "addr = {:#X} and {:#X}",
-                //     addr,
-                //     self.mirror_nametable_addr(addr)
+                //     "offset {:#X} value {:#X}",
+                //     self.mirror_nametable_addr(addr),
+                //     value,
                 // );
                 self.vram[self.mirror_nametable_addr(addr) as usize] = value;
+            }
+            0x3f10 | 0x3f14 | 0x3f18 | 0x3f1c => {
+                self.palette_table[(addr - 0x10 - 0x3f00) as usize] = value;
             }
             0x3f00..=0x3fff => {
                 let offset = addr - 0x3f00;
@@ -672,53 +671,64 @@ impl PPU {
 
         let mut is_not_zero = false;
 
+        // println!("new render");
+
+        let mut count = 0;
+
         // Handle rendering background tiles
         for i in 0..0x03c0 {
-            let tile_number = self.vram[i] as usize;
+            let mut tile_number = self.vram[i] as usize;
 
-            if tile_number != 0 {
-                // println!("tile {}", tile_number);
-                is_not_zero = true;
+            if tile_number == 98 {
+                count += 1;
             }
 
             let x = i % 32;
             let y = i / 32;
+
+            // println!("tn {}", tile_number);
 
             let palette = self.bg_palette(x, y);
 
             new_frame.copy_bg_tile(bank, tile_number, (x * 8, y * 8), &palette);
         }
 
+        // println!("count = {}", count);
+
+        if count == 82 {
+            is_not_zero = true;
+        }
+
         if is_not_zero {
-            // panic!("dinito");
+            panic!("dinito");
         }
 
         // Handle rendering sprites
 
         // assert!(self.ctrl_reg.sprite_size() == 0);
 
-        bank = self.ctrl_reg.sprite_pt() as usize;
+        // bank = self.ctrl_reg.sprite_pt() as usize;
 
-        for i in 0..64 {
-            let y_pos: usize = self.oam_data[i * 4 + 0] as usize + 1;
-            let tile_number = self.oam_data[i * 4 + 1] as usize;
-            let attributes = SpriteAttributes::from_bits_retain(self.oam_data[i * 4 + 2]);
-            let x_pos = self.oam_data[i * 4 + 3] as usize;
+        // for i in 0..64 {
+        //     let y_pos: usize = self.oam_data[i * 4 + 0] as usize + 1;
+        //     let tile_number = self.oam_data[i * 4 + 1] as usize;
+        //     let attributes = SpriteAttributes::from_bits_retain(self.oam_data[i * 4 + 2]);
+        //     let x_pos = self.oam_data[i * 4 + 3] as usize;
 
-            let palette_index = (attributes.bits()) & 0b11;
+        //     let palette_index = (attributes.bits()) & 0b11;
 
-            let palette = self.sprite_palette(palette_index);
-            let flip_horizonal = attributes.contains(SpriteAttributes::FLIP_HORIZONTAL);
-            let flip_vertical = attributes.contains(SpriteAttributes::FLIP_VERTICAL);
+        //     let palette = self.sprite_palette(palette_index);
+        //     let flip_horizonal = attributes.contains(SpriteAttributes::FLIP_HORIZONTAL);
+        //     let flip_vertical = attributes.contains(SpriteAttributes::FLIP_VERTICAL);
 
-            new_frame.copy_sprite_tile(
-                bank,
-                tile_number,
-                (x_pos, y_pos),
-                (flip_horizonal, flip_vertical),
-                &palette,
-            );
-        }
+        //     new_frame.copy_sprite_tile(
+        //         bank,
+        //         tile_number,
+        //         (x_pos, y_pos),
+        //         (flip_horizonal, flip_vertical),
+        //         &palette,
+        //     );
+        // }
 
         new_frame
     }

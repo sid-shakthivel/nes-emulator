@@ -32,7 +32,7 @@ mod rom;
 
 fn main() {
     // Setup ROM
-    let rom_filename = "dk.nes";
+    let rom_filename = "smb.nes";
 
     let mut rom_file = File::open(&rom_filename).expect("Error: Cannot find ROM file");
     let rom_size = std::fs::metadata(&rom_filename)
@@ -79,10 +79,6 @@ fn main() {
 
         canvas.copy(&texture, None, None).unwrap();
         canvas.present();
-
-        // panic!("dono");
-
-        let test = Keycode::A;
 
         for event in event_pump.poll_iter() {
             match event {

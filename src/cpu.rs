@@ -132,9 +132,13 @@ impl<'a> CPU<'a> {
                 let offset = self.read_mem(old_pc) as i8;
                 let addr = (old_pc as i16).wrapping_add(offset as i16) as u16;
 
-                if self.is_new_page(old_pc, addr) {
+                if self.is_new_page(old_pc + 1, addr + 1) && does_branch {
                     cycles += 1;
                 }
+
+                // if self.cycles == 89081 {
+                //     panic!("cycles is {}", cycles);
+                // }
             }
             _ => {}
         }
@@ -292,9 +296,9 @@ impl<'a> CPU<'a> {
         //     self.cycles
         // );
 
-        // if self.cycles >= 119120 {
-        //     panic!("have reached a point of difference");
-        // }
+        if self.cycles >= 117948 {
+            // panic!("have reached a point of difference");
+        }
 
         self.pc += 1;
 
@@ -648,7 +652,10 @@ impl<'a> CPU<'a> {
 
                 self.write_operand(addr, result, opcode_data.address_mode);
 
-                self.update_zero_flag(result);
+                if opcode_data.address_mode == AddressMode::Accumulator {
+                    self.update_zero_flag(result);
+                }
+
                 self.update_negative_flag(result);
             }
             Instruction::ROR => {
@@ -657,12 +664,11 @@ impl<'a> CPU<'a> {
 
                 let carry = self.status.contains(StatusFlags::CARRY) as u8;
 
+                self.update_carry_flag(operand & 1 != 0);
+
                 let result = (operand >> 1) | (carry << 7);
 
                 self.write_operand(addr, result, opcode_data.address_mode);
-
-                self.update_carry_flag(operand & 0b0000_0001 != 0);
-                self.update_zero_flag(result);
                 self.update_negative_flag(result);
             }
             Instruction::RTI => {
