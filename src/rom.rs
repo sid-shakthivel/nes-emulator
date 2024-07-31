@@ -21,7 +21,7 @@ bitflags! {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum MirroringType {
     Vertical,
     Horizontal,
@@ -59,22 +59,10 @@ impl ROMHeader {
         let mapper = self.control_byte_1.bits() & ControlByte1::LOWER_ROM_MAPPER.bits()
             | (self.control_byte_2.bits() & ControlByte2::UPPER_ROM_MAPPER.bits());
 
-        // let test = (raw_data[7] & 0b1111_0000) | (raw_data[6] >> 4);
-
-        // println!("test: {} mapper: {}", test, mapper);
-
         let should_skip_trainer = self.control_byte_1.contains(ControlByte1::TRAINER);
-
-        // println!(
-        //     "{:#X} {:#X}",
-        //     header.control_byte_1.bits(),
-        //     header.control_byte_2.bits(),
-        // );
 
         assert!(!self.control_byte_2.contains(ControlByte2::FORMAT_1_TYPE));
         assert!(!self.control_byte_2.contains(ControlByte2::FORMAT_2_TYPE));
-
-        // println!("Mirroring: {:?}", screen_mirroring);
 
         let prg_rom_size = self.prg_rom_size as usize * PRG_ROM_PAGE_SIZE;
         let chr_rom_size = self.chr_rom_size as usize * CHR_ROM_PAGE_SIZE;
@@ -94,10 +82,14 @@ impl ROMHeader {
             .control_byte_1
             .contains(ControlByte1::VERTICAL_MIRRORING);
 
-        match (four_screen, vertical_mirroring) {
+        let mirroring = match (four_screen, vertical_mirroring) {
             (true, _) => MirroringType::FourScreen,
             (false, true) => MirroringType::Vertical,
             (false, false) => MirroringType::Horizontal,
-        }
+        };
+
+        // assert!(mirroring == MirroringType::Vertical);
+
+        mirroring
     }
 }

@@ -122,12 +122,16 @@ impl Frame {
         tile_number: usize,
         tile_coords: (usize, usize),
         palette: &[u8; 4],
+        offset: (isize, isize),
+        x_limits: (usize, usize),
     ) {
         assert!(bank <= 1);
         let bank = (bank * 0x1000) as usize;
 
         let tile_a_offset = bank + tile_number * 16;
         let tile_b_offset = tile_a_offset + 8;
+
+        let (scroll_x, scroll_y) = offset;
 
         let (tile_x, tile_y) = tile_coords;
 
@@ -145,7 +149,11 @@ impl Frame {
 
                 let x_offset = 7 - j;
 
-                self.set_pixel(x_offset + tile_x, i + tile_y, colour);
+                let x_value = (x_offset + tile_x);
+
+                if x_value >= x_limits.0 && x_value < x_limits.1 {
+                    self.set_pixel((x_value as isize + scroll_x) as usize, i + tile_y, colour);
+                }
             }
         }
     }
@@ -178,6 +186,10 @@ impl Frame {
                 let colour_index = ((1 & lower_bit) << 1) | (upper_bit & 1);
 
                 let colour = SDL_COLOUR_PALLETE[palette[colour_index as usize] as usize];
+
+                if colour_index == 0 {
+                    continue;
+                }
 
                 let x_offset = 7 - j;
 
@@ -270,6 +282,10 @@ impl PpuMask {
 
     pub fn update(&mut self, value: u8) {
         *self = PpuMask::from_bits_truncate(value);
+    }
+
+    pub fn show_sprites(&self) -> bool {
+        self.contains(PpuMask::SHOW_SPRITES)
     }
 }
 
@@ -423,8 +439,8 @@ pub struct PPU {
     data_buffer: u8,
     pub oam_addr: u8,
     cycles: u32,
-    current_scanline: u16,
-    nmi_interrupt: u8,
+    scanline: u16,
+    pub nmi_interrupt: u8,
 }
 
 impl PPU {
@@ -443,7 +459,7 @@ impl PPU {
             mirroring,
             oam_addr: 0,
             cycles: 0,
-            current_scanline: 0,
+            scanline: 0,
             nmi_interrupt: 0,
         }
     }
@@ -459,20 +475,11 @@ impl PPU {
     }
 
     pub fn write_addr_reg(&mut self, value: u8) {
-        // panic!("write addr register");
         let old = self.addr_reg.get().wrapping_sub(0x2000);
         self.addr_reg.update(value);
-        // println!(
-        //     "{:#X} {:#X} {:#X} {}",
-        //     self.addr_reg.get() - 0x2000,
-        //     value,
-        //     old,
-        //     self.addr_reg.is_high
-        // );
     }
 
     pub fn write_ctrl_reg(&mut self, value: u8) {
-        // println!("write ctrl register {:b}", value);
         let before_nmi_status = self.ctrl_reg.generate_nmi();
         self.ctrl_reg.update(value);
 
@@ -482,17 +489,14 @@ impl PPU {
     }
 
     pub fn write_mask_reg(&mut self, value: u8) {
-        // println!("write mask register {:b}", value);
         self.mask_reg.update(value);
     }
 
     pub fn write_oam_addr(&mut self, value: u8) {
-        // panic!("write oam addr {}", value);
         self.oam_addr = value;
     }
 
     pub fn write_scroll_addr(&mut self, value: u8) {
-        // println!("write scroll addr {:b}", value);
         self.scroll_reg.write(value);
     }
 
@@ -500,9 +504,7 @@ impl PPU {
         let data = self.status_reg.get();
         self.addr_reg.reset_is_high();
         self.status_reg.reset_vblank();
-
-        // println!("read status reg {:b}", data);
-
+        self.scroll_reg.reset_latch();
         data
     }
 
@@ -517,20 +519,26 @@ impl PPU {
         self.oam_addr = self.oam_addr.wrapping_add(1);
     }
 
+    fn is_sprite_0_hit(&self, cycle: u32) -> bool {
+        let y = self.oam_data[0] as u32;
+        let x = self.oam_data[3] as u32;
+        (y == self.scanline as u32) && x <= cycle && self.mask_reg.show_sprites()
+    }
+
     fn mirror_nametable_addr(&self, addr: u16) -> u16 {
         match self.mirroring {
             MirroringType::Horizontal => match addr {
                 0x2000..=0x23FF => addr - 0x2000,
                 0x2400..=0x27FF => addr - 0x2400,
-                0x2800..=0x2BFF => addr - 0x2800 + 0x100,
-                0x2C00..=0x2FFF => addr - 0x2C00 + 0x100,
+                0x2800..=0x2BFF => addr - 0x2800 + 0x400,
+                0x2C00..=0x2FFF => addr - 0x2C00 + 0x400,
                 _ => panic!("Error: Invalid nametable address"),
             },
             MirroringType::Vertical => match addr {
                 0x2000..=0x23FF => addr - 0x2000,
-                0x2400..=0x27FF => addr - 0x2400 + 0x100,
+                0x2400..=0x27FF => addr - 0x2400 + 0x400,
                 0x2800..=0x2BFF => addr - 0x2800,
-                0x2C00..=0x2FFF => addr - 0x2C00 + 0x100,
+                0x2C00..=0x2FFF => addr - 0x2C00 + 0x400,
                 _ => panic!("Error: Invalid nametable address"),
             },
             _ => panic!("Error: Invalid mirroring type"),
@@ -538,8 +546,6 @@ impl PPU {
     }
 
     pub fn read(&mut self) -> u8 {
-        // panic!("reading");
-
         let addr = self.addr_reg.get();
         self.increment_vram_addr();
 
@@ -600,10 +606,14 @@ impl PPU {
         self.cycles += cycles * 3;
 
         if self.cycles >= 341 {
-            self.cycles = self.cycles - 341;
-            self.current_scanline += 1;
+            if self.is_sprite_0_hit(self.cycles) {
+                self.status_reg.set_sprite_zero_hit(true);
+            }
 
-            if self.current_scanline == 241 {
+            self.cycles = self.cycles - 341;
+            self.scanline += 1;
+
+            if self.scanline == 241 {
                 self.status_reg.set_vblank(true);
                 self.status_reg.set_sprite_zero_hit(false);
 
@@ -612,8 +622,8 @@ impl PPU {
                 }
             }
 
-            if self.current_scanline >= 262 {
-                self.current_scanline = 0;
+            if self.scanline >= 262 {
+                self.scanline = 0;
                 self.nmi_interrupt = 0;
 
                 self.status_reg.set_sprite_zero_hit(false);
@@ -626,9 +636,9 @@ impl PPU {
         return false;
     }
 
-    fn bg_palette(&self, tile_col: usize, tile_row: usize) -> [u8; 4] {
+    fn bg_palette(&self, tile_col: usize, tile_row: usize, buffer: &Vec<u8>) -> [u8; 4] {
         let attr_table_index = tile_row / 4 * 8 + tile_col / 4;
-        let attr_byte = self.vram[0x3c0 + attr_table_index];
+        let attr_byte = buffer[0x03c0 + attr_table_index];
 
         let quadrant_row = (tile_row % 4) / 2;
         let quadrant_col = (tile_col % 4) / 2;
@@ -659,76 +669,89 @@ impl PPU {
 
     pub fn render(&self) -> Frame {
         let mut bank = self.ctrl_reg.bg_pt() as usize;
-        let nametable_addr = self.mirror_nametable_addr(self.ctrl_reg.nametable_addr());
+        let nametable_addr = self.ctrl_reg.nametable_addr();
 
-        // println!("{:#X}", nametable_addr);
+        let mut scroll_x = self.scroll_reg.scroll_x as isize;
+        let scroll_y = self.scroll_reg.scroll_y as isize;
 
-        // if nametable_addr != 0x2000 {
-        //     panic!("nametable_addr = {:#X}", nametable_addr);
-        // }
+        // assert!(nametable_addr == 0x2000);
 
         let mut new_frame = Frame::new(&self.chr_rom);
 
-        let mut is_not_zero = false;
+        let mut nametable_a = self.vram[0..0x400].to_vec();
+        let mut nametable_b = self.vram[0x400..0x800].to_vec();
 
-        // println!("new render");
-
-        let mut count = 0;
+        if nametable_addr == 0x2400 {
+            // println!("here?");
+            nametable_a = self.vram[0x400..0x800].to_vec();
+            nametable_b = self.vram[0..0x400].to_vec();
+        }
 
         // Handle rendering background tiles
         for i in 0..0x03c0 {
-            let mut tile_number = self.vram[i] as usize;
-
-            if tile_number == 98 {
-                count += 1;
-            }
+            let mut tile_number = nametable_a[i] as usize;
 
             let x = i % 32;
             let y = i / 32;
 
-            // println!("tn {}", tile_number);
+            let palette = self.bg_palette(x, y, &nametable_a);
 
-            let palette = self.bg_palette(x, y);
-
-            new_frame.copy_bg_tile(bank, tile_number, (x * 8, y * 8), &palette);
+            new_frame.copy_bg_tile(
+                bank,
+                tile_number,
+                (x * 8, y * 8),
+                &palette,
+                (scroll_x * -1, scroll_y),
+                (scroll_x as usize, 256),
+            );
         }
 
-        // println!("count = {}", count);
+        if scroll_x != 0 {
+            for i in 0..0x03c0 {
+                let mut tile_number = nametable_b[i] as usize;
 
-        if count == 82 {
-            is_not_zero = true;
-        }
+                let x = i % 32;
+                let y = i / 32;
 
-        if is_not_zero {
-            panic!("dinito");
+                let palette = self.bg_palette(x, y, &nametable_b);
+
+                new_frame.copy_bg_tile(
+                    bank,
+                    tile_number,
+                    (x * 8, y * 8),
+                    &palette,
+                    (256 - scroll_x, scroll_y),
+                    (0, scroll_x as usize),
+                );
+            }
         }
 
         // Handle rendering sprites
 
         // assert!(self.ctrl_reg.sprite_size() == 0);
 
-        // bank = self.ctrl_reg.sprite_pt() as usize;
+        bank = self.ctrl_reg.sprite_pt() as usize;
 
-        // for i in 0..64 {
-        //     let y_pos: usize = self.oam_data[i * 4 + 0] as usize + 1;
-        //     let tile_number = self.oam_data[i * 4 + 1] as usize;
-        //     let attributes = SpriteAttributes::from_bits_retain(self.oam_data[i * 4 + 2]);
-        //     let x_pos = self.oam_data[i * 4 + 3] as usize;
+        for i in 0..64 {
+            let y_pos: usize = self.oam_data[i * 4 + 0] as usize + 1;
+            let tile_number = self.oam_data[i * 4 + 1] as usize;
+            let attributes = SpriteAttributes::from_bits_retain(self.oam_data[i * 4 + 2]);
+            let x_pos = self.oam_data[i * 4 + 3] as usize;
 
-        //     let palette_index = (attributes.bits()) & 0b11;
+            let palette_index = (attributes.bits()) & 0b11;
 
-        //     let palette = self.sprite_palette(palette_index);
-        //     let flip_horizonal = attributes.contains(SpriteAttributes::FLIP_HORIZONTAL);
-        //     let flip_vertical = attributes.contains(SpriteAttributes::FLIP_VERTICAL);
+            let palette = self.sprite_palette(palette_index);
+            let flip_horizonal = attributes.contains(SpriteAttributes::FLIP_HORIZONTAL);
+            let flip_vertical = attributes.contains(SpriteAttributes::FLIP_VERTICAL);
 
-        //     new_frame.copy_sprite_tile(
-        //         bank,
-        //         tile_number,
-        //         (x_pos, y_pos),
-        //         (flip_horizonal, flip_vertical),
-        //         &palette,
-        //     );
-        // }
+            new_frame.copy_sprite_tile(
+                bank,
+                tile_number,
+                (x_pos, y_pos),
+                (flip_horizonal, flip_vertical),
+                &palette,
+            );
+        }
 
         new_frame
     }

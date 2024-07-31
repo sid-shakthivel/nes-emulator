@@ -127,19 +127,22 @@ impl<'a> Memory<'a> {
     }
 
     pub fn update_ppu_cycles(&mut self, cycles: u32) {
-        // let nmi_before = self.ppu.borrow_mut().get_nmi();
-        // let nmi_after = self.ppu.borrow_mut().get_nmi();
+        let nmi_before = self.ppu.borrow_mut().nmi_interrupt;
+        self.ppu.borrow_mut().update_cycles(cycles);
+        let nmi_after = self.ppu.borrow_mut().nmi_interrupt;
 
-        if self.ppu.borrow_mut().update_cycles(cycles) {
+        if nmi_before == 0 && nmi_after == 1 {
             (self.callback)(
                 &mut *self.ppu.borrow_mut(),
                 &mut *self.controller_a.borrow_mut(),
             );
         }
 
-        // if nmi_before == 0 && nmi_after == 1 {
-        //     // Render
-        //     (self.callback)(&mut *self.ppu.borrow_mut());
+        // if self.ppu.borrow_mut().update_cycles(cycles) {
+        //     (self.callback)(
+        //         &mut *self.ppu.borrow_mut(),
+        //         &mut *self.controller_a.borrow_mut(),
+        //     );
         // }
     }
 

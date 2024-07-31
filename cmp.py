@@ -1,5 +1,5 @@
 custom = open("test.txt")
-correct = open("/Users/siddharth/nes_ebook/code/ch6.4/test.txt")
+correct = open("/Users/siddharth/nes_ebook/code/ch8/test.txt")
 
 # Remember to update the correct file
 

@@ -569,6 +569,10 @@ impl<'a> CPU<'a> {
                 // Loads byte of memory into accumulator
                 let mut addr = self.get_operand_addr(opcode_data);
 
+                if self.cycles == 955829 {
+                    // panic!("cycles {:#X}", addr);
+                }
+
                 self.acc = self.get_operand(addr, opcode_data.address_mode);
 
                 self.update_negative_flag(self.acc);
