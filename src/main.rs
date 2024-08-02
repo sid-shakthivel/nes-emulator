@@ -10,6 +10,7 @@ use std::mem;
 use std::rc::Rc;
 use std::time::Duration;
 
+use controller::Controller;
 use memory::Memory;
 use ppu::frame::Frame;
 use rand::rngs::StdRng;
@@ -42,14 +43,10 @@ fn main() {
     let romname = &rom_filename[0..rom_filename.len() - 4];
 
     let mut rom_file = File::open(&rom_filename).expect("Error: Cannot find ROM file");
-    let rom_size = std::fs::metadata(&rom_filename)
-        .expect("Error: Cannot read ROM metadata")
-        .len() as usize;
+    let rom_size = std::fs::metadata(&rom_filename).expect("Error: Cannot read ROM metadata").len() as usize;
 
     let mut rom_data = vec![0; rom_size];
-    rom_file
-        .read(&mut rom_data)
-        .expect("Cannot find enough space to read ROM into buffer");
+    rom_file.read(&mut rom_data).expect("Cannot find enough space to read ROM into buffer");
 
     let rom = rom::ROMHeader::from_vec(&rom_data);
     let (prg_rom, chr_rom) = rom.verify_and_extract();
@@ -59,44 +56,28 @@ fn main() {
 
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
-    let window = video_subsystem
-        .window(&romname, (256.0 * 3.0) as u32, (240.0 * 3.0) as u32)
-        .position_centered()
-        .build()
-        .unwrap();
+    let window = video_subsystem.window(&romname, (256.0 * 3.0) as u32, (240.0 * 3.0) as u32).position_centered().build().unwrap();
 
     let mut canvas = window.into_canvas().present_vsync().build().unwrap();
     let mut event_pump = sdl_context.event_pump().unwrap();
     canvas.set_scale(3.0, 3.0).unwrap();
 
     let creator = canvas.texture_creator();
-    let mut texture = creator
-        .create_texture_target(PixelFormatEnum::RGB24, 256, 240)
-        .unwrap();
+    let mut texture = creator.create_texture_target(PixelFormatEnum::RGB24, 256, 240).unwrap();
 
-    // Setup emulator components
-    let ppu = Rc::new(RefCell::new(ppu::PPU::new(chr_rom, mirroring_type)));
-
-    let controller_a = Rc::new(RefCell::new(controller::Controller::new()));
-
-    let mut memory = Memory::new(prg_rom, ppu, controller_a, |ppu, controller| {
-        let frame = ppu.render();
-
+    // Setup callbackt to display content
+    let callback: Box<dyn FnMut(&mut Frame, &mut Controller)> = Box::new(move |frame: &mut Frame, controller: &mut Controller| {
         texture.update(None, &frame.pixels, 256 * 3).unwrap();
 
         canvas.copy(&texture, None, None).unwrap();
         canvas.present();
 
-        for event in event_pump.poll_iter()
+        // Handle events here instead of inside the closure
+        while let Some(event) = event_pump.poll_event()
         {
             match event
             {
-                Event::Quit { .. }
-                | Event::KeyDown {
-                    keycode: Some(Keycode::Escape),
-                    ..
-                } => std::process::exit(0),
-
+                Event::Quit { .. } | Event::KeyDown { keycode: Some(Keycode::Escape), .. } => std::process::exit(0),
                 Event::KeyDown { keycode, .. } =>
                 {
                     if let Some(key) = keycode
@@ -117,9 +98,13 @@ fn main() {
         }
     });
 
-    let memory_ref = Rc::new(RefCell::new(memory));
+    // Setup emulator components
+    let controller_a = Rc::new(RefCell::new(controller::Controller::new()));
 
-    let mut cpu = CPU::new(memory_ref);
+    let ppu = Rc::new(RefCell::new(ppu::PPU::new(chr_rom, mirroring_type, Rc::clone(&controller_a), callback)));
+    let memory = Rc::new(RefCell::new(Memory::new(prg_rom, Rc::clone(&ppu), Rc::clone(&controller_a))));
+
+    let mut cpu = CPU::new(memory, Rc::clone(&ppu));
     cpu.reset();
     cpu.run();
 }

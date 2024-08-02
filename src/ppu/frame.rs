@@ -29,15 +29,7 @@ impl Frame {
         self.pixels[base + 2] = rgb.2;
     }
 
-    pub fn copy_bg_tile(
-        &mut self,
-        bank: usize,
-        tile_number: usize,
-        tile_coords: (usize, usize),
-        palette: &[u8; 4],
-        offset: (isize, isize),
-        x_limits: (usize, usize),
-    ) {
+    pub fn copy_bg_tile(&mut self, bank: usize, tile_number: usize, tile_coords: (usize, usize), palette: &[u8; 4], offset: (isize, isize), x_limits: (usize, usize)) {
         assert!(bank <= 1);
         let bank = (bank * 0x1000) as usize;
 
@@ -74,14 +66,7 @@ impl Frame {
         }
     }
 
-    pub fn copy_sprite_tile(
-        &mut self,
-        bank: usize,
-        tile_number: usize,
-        tile_coords: (usize, usize),
-        tile_mods: (bool, bool),
-        palette: &[u8; 4],
-    ) {
+    pub fn copy_sprite_tile(&mut self, bank: usize, tile_number: usize, tile_coords: (usize, usize), tile_mods: (bool, bool), palette: &[u8; 4]) {
         assert!(bank <= 1);
         let bank = (bank * 0x1000) as usize;
 

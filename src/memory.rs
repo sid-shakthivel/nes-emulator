@@ -27,30 +27,20 @@ const PPU_REG_MIRROR_END: u16 = 0x3fff;
     0x8000-0xffff - PRG ROM
 */
 
-pub struct Memory<'call> {
+pub struct Memory<'a> {
     ram: [u8; 2048],
     prg_rom: Vec<u8>,
-    ppu: Rc<RefCell<PPU>>,
+    ppu: Rc<RefCell<PPU<'a>>>,
     controller_a: Rc<RefCell<Controller>>,
-    callback: Box<dyn FnMut(&mut PPU, &mut Controller) + 'call>,
 }
 
 impl<'a> Memory<'a> {
-    pub fn new<'call, F>(
-        prg_rom: Vec<u8>,
-        ppu: Rc<RefCell<PPU>>,
-        controller_a: Rc<RefCell<Controller>>,
-        callback: F,
-    ) -> Memory<'call>
-    where
-        F: FnMut(&mut PPU, &mut Controller) + 'call,
-    {
+    pub fn new(prg_rom: Vec<u8>, ppu: Rc<RefCell<PPU>>, controller_a: Rc<RefCell<Controller>>) -> Memory {
         Memory {
             ram: [0; 2048],
             prg_rom,
             ppu,
             controller_a,
-            callback: Box::new(callback),
         }
     }
 
@@ -71,13 +61,7 @@ impl<'a> Memory<'a> {
         match addr
         {
             RAM_START..=RAM_MIRROR_END => self.ram[(addr & 0x7FF) as usize],
-            0x2000 | 0x2001 | 0x2003 | 0x2005 | 0x2006 | 0x4014 =>
-            {
-                panic!("Attempt to read from write-only PPU address {:x}", addr);
-            }
-            0x2002 => self.ppu.borrow_mut().read_status_reg(),
-            0x2004 => self.ppu.borrow_mut().read_oam_data(),
-            0x2007 => self.ppu.borrow_mut().read(),
+            0x2000..=0x2007 => self.ppu.borrow_mut().read_reg(addr),
             PPU_REG_START..=PPU_REG_MIRROR_END => self.read_mem(addr & 0x2007),
             PRG_ROM_START..=PRG_ROM_END => self.read_prg_rom(addr),
             0x4000..=0x4013 | 0x4015 =>
@@ -102,13 +86,7 @@ impl<'a> Memory<'a> {
         match addr
         {
             RAM_START..=RAM_MIRROR_END => self.ram[(addr) as usize] = value,
-            0x2000 => self.ppu.borrow_mut().write_ctrl_reg(value),
-            0x2001 => self.ppu.borrow_mut().write_mask_reg(value),
-            0x2003 => self.ppu.borrow_mut().write_oam_addr(value),
-            0x2004 => self.ppu.borrow_mut().write_oam_data(value),
-            0x2005 => self.ppu.borrow_mut().write_scroll_addr(value),
-            0x2006 => self.ppu.borrow_mut().write_addr_reg(value),
-            0x2007 => self.ppu.borrow_mut().write(value),
+            0x2000..=0x2007 => self.ppu.borrow_mut().write_reg(addr, value),
             0x4014 =>
             {
                 let mut buffer: [u8; 256] = [0; 256];
@@ -121,38 +99,17 @@ impl<'a> Memory<'a> {
             }
             0x4000..=0x4013 | 0x4015 =>
             {
-                //ignore APU
+                // Ignore APU
             }
             0x4016 => self.controller_a.borrow_mut().write(value),
             0x4017 =>
             {
-                // ignore joypad 2
+                // Ignore joypad 2
             }
             PPU_REG_START..=PPU_REG_MIRROR_END => self.write_mem(addr & 0x2007, value),
             PRG_ROM_START..=PRG_ROM_END => panic!("Error: PRG_ROM is read only"),
-            _ =>
-            {
-                panic!("Error: Unknown Memory Address {:#X}", addr);
-            }
+            _ => panic!("Error: Unknown Memory Address {:#X}", addr),
         }
-    }
-
-    pub fn update_ppu_cycles(&mut self, cycles: u32) {
-        let nmi_before = self.ppu.borrow_mut().nmi_interrupt;
-        self.ppu.borrow_mut().update_cycles(cycles);
-        let nmi_after = self.ppu.borrow_mut().nmi_interrupt;
-
-        if nmi_before == 0 && nmi_after == 1
-        {
-            (self.callback)(
-                &mut *self.ppu.borrow_mut(),
-                &mut *self.controller_a.borrow_mut(),
-            );
-        }
-    }
-
-    pub fn get_nmi(&mut self) -> u8 {
-        self.ppu.borrow_mut().get_nmi()
     }
 
     fn read_prg_rom(&self, mut addr: u16) -> u8 {

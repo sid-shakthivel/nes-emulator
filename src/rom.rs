@@ -56,8 +56,7 @@ impl ROMHeader {
     pub fn verify_and_extract(&self) -> (Vec<u8>, Vec<u8>) {
         assert!(self.string == [0x4e, 0x45, 0x53, 0x1a]);
 
-        let mapper = self.control_byte_1.bits() & ControlByte1::LOWER_ROM_MAPPER.bits()
-            | (self.control_byte_2.bits() & ControlByte2::UPPER_ROM_MAPPER.bits());
+        let mapper = self.control_byte_1.bits() & ControlByte1::LOWER_ROM_MAPPER.bits() | (self.control_byte_2.bits() & ControlByte2::UPPER_ROM_MAPPER.bits());
 
         let should_skip_trainer = self.control_byte_1.contains(ControlByte1::TRAINER);
 
@@ -78,9 +77,7 @@ impl ROMHeader {
 
     pub fn get_mirroring_type(&self) -> MirroringType {
         let four_screen = self.control_byte_1.contains(ControlByte1::FOUR_SCREEN_VRAM);
-        let vertical_mirroring = self
-            .control_byte_1
-            .contains(ControlByte1::VERTICAL_MIRRORING);
+        let vertical_mirroring = self.control_byte_1.contains(ControlByte1::VERTICAL_MIRRORING);
 
         let mirroring = match (four_screen, vertical_mirroring)
         {

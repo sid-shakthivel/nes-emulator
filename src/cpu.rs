@@ -34,10 +34,11 @@ pub struct CPU<'a> {
     status: StatusFlags,
     cycles: u32,
     memory: Rc<RefCell<Memory<'a>>>,
+    ppu: Rc<RefCell<PPU<'a>>>,
 }
 
 impl<'a> CPU<'a> {
-    pub fn new(memory_unit: Rc<RefCell<Memory<'a>>>) -> Self {
+    pub fn new(memory: Rc<RefCell<Memory<'a>>>, ppu: Rc<RefCell<PPU<'a>>>) -> Self {
         // For nestest, pc must be set to 0xC000
 
         CPU {
@@ -48,7 +49,8 @@ impl<'a> CPU<'a> {
             sp: STACK_POINTER,
             status: StatusFlags::empty(),
             cycles: 0,
-            memory: memory_unit,
+            memory,
+            ppu,
         }
     }
 
@@ -243,8 +245,7 @@ impl<'a> CPU<'a> {
 
         self.update_interrupt_flag(true);
 
-        self.cycles += 2;
-        self.memory.borrow_mut().update_ppu_cycles(2);
+        self.update_cycles(2);
 
         self.pc = self.read_mem_u16(0xFFFA);
     }
@@ -252,7 +253,7 @@ impl<'a> CPU<'a> {
     pub fn run(&mut self) {
         loop
         {
-            if self.memory.borrow_mut().get_nmi() == 1
+            if self.ppu.borrow_mut().get_nmi() == 1
             {
                 self.nmi();
             }
@@ -925,8 +926,12 @@ impl<'a> CPU<'a> {
             self.pc += (instruction.bytes as u16 - 1);
         }
 
-        self.cycles += updated_cycles;
-        self.memory.borrow_mut().update_ppu_cycles(updated_cycles);
+        self.update_cycles(updated_cycles);
+    }
+
+    fn update_cycles(&mut self, cycles: u32) {
+        self.cycles += cycles;
+        self.ppu.borrow_mut().update_cycles(cycles);
     }
 
     fn get_operand(&mut self, addr: u16, address_mode: AddressMode) -> u8 {

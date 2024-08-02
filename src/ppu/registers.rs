@@ -187,11 +187,7 @@ pub struct ScrollRegister {
 
 impl ScrollRegister {
     pub fn new() -> Self {
-        ScrollRegister {
-            scroll_x: 0,
-            scroll_y: 0,
-            is_high: false,
-        }
+        ScrollRegister { scroll_x: 0, scroll_y: 0, is_high: false }
     }
 
     pub fn write(&mut self, data: u8) {

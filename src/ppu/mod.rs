@@ -1,9 +1,13 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use bitflags::bitflags;
 use bitflags::Flags;
 
 use frame::Frame;
 use registers::{AddrRegister, PpuCtrl, PpuMask, PpuStatus, ScrollRegister};
 
+use crate::controller::Controller;
 use crate::rom::MirroringType;
 
 pub mod frame;
@@ -34,26 +38,34 @@ bitflags! {
     }
 }
 
-pub struct PPU {
-    pub chr_rom: Vec<u8>,
-    pub palette_table: [u8; 32],
-    pub vram: [u8; 2048],
-    pub oam_data: [u8; 256],
-    pub mirroring: MirroringType,
+pub struct PPU<'call> {
+    chr_rom: Vec<u8>,
+    palette_table: [u8; 32],
+    vram: [u8; 2048],
+    oam_data: [u8; 256],
+
+    mirroring: MirroringType,
     addr_reg: AddrRegister,
     ctrl_reg: PpuCtrl,
     mask_reg: PpuMask,
     status_reg: PpuStatus,
     scroll_reg: ScrollRegister,
+
     data_buffer: u8,
-    pub oam_addr: u8,
+    oam_addr: u8,
     cycles: u32,
     scanline: u16,
-    pub nmi_interrupt: u8,
+    nmi_interrupt: u8,
+    callback: Box<dyn FnMut(&mut Frame, &mut Controller) + 'call>,
+
+    controller: Rc<RefCell<Controller>>,
 }
 
-impl PPU {
-    pub fn new(chr_rom: Vec<u8>, mirroring: MirroringType) -> Self {
+impl<'a> PPU<'a> {
+    pub fn new<'call, F>(chr_rom: Vec<u8>, mirroring: MirroringType, controller: Rc<RefCell<Controller>>, callback: F) -> PPU<'call>
+    where
+        F: FnMut(&mut Frame, &mut Controller) + 'call,
+    {
         PPU {
             chr_rom,
             palette_table: [0; 32],
@@ -70,6 +82,8 @@ impl PPU {
             cycles: 0,
             scanline: 0,
             nmi_interrupt: 0,
+            controller,
+            callback: Box::from(callback),
         }
     }
 
@@ -81,50 +95,6 @@ impl PPU {
 
     fn increment_vram_addr(&mut self) {
         self.addr_reg.increment(self.ctrl_reg.get_inc_value());
-    }
-
-    pub fn write_addr_reg(&mut self, value: u8) {
-        let old = self.addr_reg.get().wrapping_sub(0x2000);
-        self.addr_reg.update(value);
-    }
-
-    pub fn write_ctrl_reg(&mut self, value: u8) {
-        let before_nmi_status = self.ctrl_reg.generate_nmi();
-        self.ctrl_reg.update(value);
-
-        if !before_nmi_status && self.ctrl_reg.generate_nmi() && self.status_reg.is_vblank()
-        {
-            self.nmi_interrupt = 1;
-        }
-    }
-
-    pub fn write_mask_reg(&mut self, value: u8) {
-        self.mask_reg.update(value);
-    }
-
-    pub fn write_oam_addr(&mut self, value: u8) {
-        self.oam_addr = value;
-    }
-
-    pub fn write_scroll_addr(&mut self, value: u8) {
-        self.scroll_reg.write(value);
-    }
-
-    pub fn read_status_reg(&mut self) -> u8 {
-        let data = self.status_reg.get();
-        self.addr_reg.reset_latch();
-        self.status_reg.reset_vblank();
-        self.scroll_reg.reset_latch();
-        data
-    }
-
-    pub fn read_oam_data(&self) -> u8 {
-        self.oam_data[self.oam_addr as usize]
-    }
-
-    pub fn write_oam_data(&mut self, value: u8) {
-        self.oam_data[self.oam_addr as usize] = value;
-        self.oam_addr = self.oam_addr.wrapping_add(1);
     }
 
     fn is_sprite_0_hit(&self, cycle: u32) -> bool {
@@ -156,7 +126,58 @@ impl PPU {
         }
     }
 
-    pub fn read(&mut self) -> u8 {
+    pub fn read_reg(&mut self, addr: u16) -> u8 {
+        match addr
+        {
+            0x2000 | 0x2001 | 0x2003 | 0x2005 | 0x2006 | 0x4014 => panic!("Error: Attempt to read from write-only PPU address {:x}", addr),
+            0x2002 =>
+            {
+                // Read Status Register
+                let data = self.status_reg.get();
+                self.addr_reg.reset_latch();
+                self.status_reg.reset_vblank();
+                self.scroll_reg.reset_latch();
+                data
+            }
+            0x2004 =>
+            {
+                // Read OAM Data
+                self.oam_addr = self.oam_addr.wrapping_add(1);
+                self.oam_data[self.oam_addr as usize]
+            }
+            0x2007 => self.read_data(),
+            _ => panic!("Error: Unknown Memory Address {:#X}", addr),
+        }
+    }
+
+    pub fn write_reg(&mut self, addr: u16, value: u8) {
+        match addr
+        {
+            0x2000 =>
+            {
+                let before_nmi_status = self.ctrl_reg.generate_nmi();
+                self.ctrl_reg.update(value);
+
+                if !before_nmi_status && self.ctrl_reg.generate_nmi() && self.status_reg.is_vblank()
+                {
+                    self.nmi_interrupt = 1;
+                }
+            }
+            0x2001 => self.mask_reg.update(value),
+            0x2003 => self.oam_addr = value,
+            0x2004 =>
+            {
+                self.oam_data[self.oam_addr as usize] = value;
+                self.oam_addr = self.oam_addr.wrapping_add(1);
+            }
+            0x2005 => self.scroll_reg.write(value),
+            0x2006 => self.addr_reg.update(value),
+            0x2007 => self.write_data(value),
+            _ => panic!("Error: Unknown Memory Address {:#X}", addr),
+        }
+    }
+
+    fn read_data(&mut self) -> u8 {
         let addr = self.addr_reg.get();
         self.increment_vram_addr();
 
@@ -183,15 +204,7 @@ impl PPU {
         }
     }
 
-    pub fn write_oam_dma(&mut self, data: &[u8; 256]) {
-        for i in 0..256
-        {
-            self.oam_data[self.oam_addr as usize] = data[i];
-            self.oam_addr = self.oam_addr.wrapping_add(1);
-        }
-    }
-
-    pub fn write(&mut self, value: u8) {
+    fn write_data(&mut self, value: u8) {
         let addr = self.addr_reg.get();
 
         match addr
@@ -206,9 +219,7 @@ impl PPU {
             }
             0x3f00..=0x3fff =>
             {
-                let offset = addr - 0x3f00;
-                // println!("palette stuff {} {}", offset, value);
-                self.palette_table[offset as usize] = value;
+                self.palette_table[addr as usize - 0x3f00] = value;
             }
             _ => panic!("Error: Unknown Memory Address {:?}", addr),
         }
@@ -216,8 +227,18 @@ impl PPU {
         self.increment_vram_addr();
     }
 
-    pub fn update_cycles(&mut self, cycles: u32) -> bool {
+    pub fn write_oam_dma(&mut self, data: &[u8; 256]) {
+        for i in 0..256
+        {
+            self.oam_data[self.oam_addr as usize] = data[i];
+            self.oam_addr = self.oam_addr.wrapping_add(1);
+        }
+    }
+
+    pub fn update_cycles(&mut self, cycles: u32) {
         self.cycles += cycles * 3;
+
+        let old_nmi = self.nmi_interrupt;
 
         if self.cycles >= 341
         {
@@ -247,12 +268,16 @@ impl PPU {
 
                 self.status_reg.set_sprite_zero_hit(false);
                 self.status_reg.reset_vblank();
-
-                return true;
             }
         }
 
-        return false;
+        let current_nmi = self.nmi_interrupt;
+
+        if old_nmi == 0 && current_nmi == 1
+        {
+            let mut frame = self.render();
+            (self.callback)(&mut frame, &mut *self.controller.borrow_mut());
+        }
     }
 
     fn bg_palette(&self, tile_col: usize, tile_row: usize, buffer: &Vec<u8>) -> [u8; 4] {
@@ -268,22 +293,12 @@ impl PPU {
 
         let palette_start: usize = 1 + (palette_index as usize) * 4;
 
-        [
-            self.palette_table[0],
-            self.palette_table[palette_start],
-            self.palette_table[palette_start + 1],
-            self.palette_table[palette_start + 2],
-        ]
+        [self.palette_table[0], self.palette_table[palette_start], self.palette_table[palette_start + 1], self.palette_table[palette_start + 2]]
     }
 
     fn sprite_palette(&self, pallete_index: u8) -> [u8; 4] {
         let start = 0x11 + (pallete_index * 4) as usize;
-        [
-            self.palette_table[0],
-            self.palette_table[start],
-            self.palette_table[start + 1],
-            self.palette_table[start + 2],
-        ]
+        [self.palette_table[0], self.palette_table[start], self.palette_table[start + 1], self.palette_table[start + 2]]
     }
 
     pub fn render(&self) -> Frame {
@@ -314,14 +329,7 @@ impl PPU {
 
             let palette = self.bg_palette(x, y, &nametable_a);
 
-            new_frame.copy_bg_tile(
-                bank,
-                tile_number,
-                (x * 8, y * 8),
-                &palette,
-                (scroll_x * -1, scroll_y),
-                (scroll_x as usize, 256),
-            );
+            new_frame.copy_bg_tile(bank, tile_number, (x * 8, y * 8), &palette, (scroll_x * -1, scroll_y), (scroll_x as usize, 256));
         }
 
         if scroll_x != 0
@@ -335,14 +343,7 @@ impl PPU {
 
                 let palette = self.bg_palette(x, y, &nametable_b);
 
-                new_frame.copy_bg_tile(
-                    bank,
-                    tile_number,
-                    (x * 8, y * 8),
-                    &palette,
-                    (256 - scroll_x, scroll_y),
-                    (0, scroll_x as usize),
-                );
+                new_frame.copy_bg_tile(bank, tile_number, (x * 8, y * 8), &palette, (256 - scroll_x, scroll_y), (0, scroll_x as usize));
             }
         }
 
@@ -362,13 +363,7 @@ impl PPU {
             let flip_horizonal = attributes.contains(SpriteAttributes::FLIP_HORIZONTAL);
             let flip_vertical = attributes.contains(SpriteAttributes::FLIP_VERTICAL);
 
-            new_frame.copy_sprite_tile(
-                bank,
-                tile_number,
-                (x_pos, y_pos),
-                (flip_horizonal, flip_vertical),
-                &palette,
-            );
+            new_frame.copy_sprite_tile(bank, tile_number, (x_pos, y_pos), (flip_horizonal, flip_vertical), &palette);
         }
 
         new_frame
