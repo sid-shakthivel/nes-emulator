@@ -33,13 +33,15 @@ impl Controller {
 
     pub fn write(&mut self, value: u8) {
         self.strobe = (value & 1) != 0;
-        if self.strobe {
+        if self.strobe
+        {
             self.index = 0;
         }
     }
 
     pub fn read(&mut self) -> u8 {
-        let button = match self.index {
+        let button = match self.index
+        {
             0 => ControllerButtons::A,
             1 => ControllerButtons::B,
             2 => ControllerButtons::SELECT,
@@ -57,16 +59,18 @@ impl Controller {
     }
 
     pub fn set_controller_key(&mut self, keycode: Keycode, value: bool) {
-        match keycode {
+        match keycode
+        {
             Keycode::A => self.state.set(ControllerButtons::A, value),
-            Keycode::B => self.state.set(ControllerButtons::B, value),
+            Keycode::S => self.state.set(ControllerButtons::B, value),
             Keycode::Return => self.state.set(ControllerButtons::START, value),
             Keycode::Space => self.state.set(ControllerButtons::SELECT, value),
             Keycode::Up => self.state.set(ControllerButtons::UP, value),
             Keycode::Down => self.state.set(ControllerButtons::DOWN, value),
             Keycode::Left => self.state.set(ControllerButtons::LEFT, value),
             Keycode::Right => self.state.set(ControllerButtons::RIGHT, value),
-            _ => {}
+            _ =>
+            {}
         }
     }
 }

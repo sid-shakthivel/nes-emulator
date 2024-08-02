@@ -68,9 +68,11 @@ impl<'a> Memory<'a> {
     }
 
     pub fn read_mem(&self, addr: u16) -> u8 {
-        match addr {
+        match addr
+        {
             RAM_START..=RAM_MIRROR_END => self.ram[(addr & 0x7FF) as usize],
-            0x2000 | 0x2001 | 0x2003 | 0x2005 | 0x2006 | 0x4014 => {
+            0x2000 | 0x2001 | 0x2003 | 0x2005 | 0x2006 | 0x4014 =>
+            {
                 panic!("Attempt to read from write-only PPU address {:x}", addr);
             }
             0x2002 => self.ppu.borrow_mut().read_status_reg(),
@@ -78,23 +80,27 @@ impl<'a> Memory<'a> {
             0x2007 => self.ppu.borrow_mut().read(),
             PPU_REG_START..=PPU_REG_MIRROR_END => self.read_mem(addr & 0x2007),
             PRG_ROM_START..=PRG_ROM_END => self.read_prg_rom(addr),
-            0x4000..=0x4013 | 0x4015 => {
+            0x4000..=0x4013 | 0x4015 =>
+            {
                 //ignore APU
                 0
             }
             0x4016 => self.controller_a.borrow_mut().read(),
-            0x4017 => {
+            0x4017 =>
+            {
                 // ignore joypad 2
                 0
             }
-            _ => {
+            _ =>
+            {
                 panic!("Error: Unknown Memory Address {:#X}", addr);
             }
         }
     }
 
     pub fn write_mem(&mut self, addr: u16, value: u8) {
-        match addr {
+        match addr
+        {
             RAM_START..=RAM_MIRROR_END => self.ram[(addr) as usize] = value,
             0x2000 => self.ppu.borrow_mut().write_ctrl_reg(value),
             0x2001 => self.ppu.borrow_mut().write_mask_reg(value),
@@ -103,24 +109,29 @@ impl<'a> Memory<'a> {
             0x2005 => self.ppu.borrow_mut().write_scroll_addr(value),
             0x2006 => self.ppu.borrow_mut().write_addr_reg(value),
             0x2007 => self.ppu.borrow_mut().write(value),
-            0x4014 => {
+            0x4014 =>
+            {
                 let mut buffer: [u8; 256] = [0; 256];
                 let hi: u16 = (value as u16) << 8;
-                for i in 0..256u16 {
+                for i in 0..256u16
+                {
                     buffer[i as usize] = self.read_mem(hi + i);
                 }
                 self.ppu.borrow_mut().write_oam_dma(&buffer);
             }
-            0x4000..=0x4013 | 0x4015 => {
+            0x4000..=0x4013 | 0x4015 =>
+            {
                 //ignore APU
             }
             0x4016 => self.controller_a.borrow_mut().write(value),
-            0x4017 => {
+            0x4017 =>
+            {
                 // ignore joypad 2
             }
             PPU_REG_START..=PPU_REG_MIRROR_END => self.write_mem(addr & 0x2007, value),
             PRG_ROM_START..=PRG_ROM_END => panic!("Error: PRG_ROM is read only"),
-            _ => {
+            _ =>
+            {
                 panic!("Error: Unknown Memory Address {:#X}", addr);
             }
         }
@@ -131,19 +142,13 @@ impl<'a> Memory<'a> {
         self.ppu.borrow_mut().update_cycles(cycles);
         let nmi_after = self.ppu.borrow_mut().nmi_interrupt;
 
-        if nmi_before == 0 && nmi_after == 1 {
+        if nmi_before == 0 && nmi_after == 1
+        {
             (self.callback)(
                 &mut *self.ppu.borrow_mut(),
                 &mut *self.controller_a.borrow_mut(),
             );
         }
-
-        // if self.ppu.borrow_mut().update_cycles(cycles) {
-        //     (self.callback)(
-        //         &mut *self.ppu.borrow_mut(),
-        //         &mut *self.controller_a.borrow_mut(),
-        //     );
-        // }
     }
 
     pub fn get_nmi(&mut self) -> u8 {
@@ -153,7 +158,8 @@ impl<'a> Memory<'a> {
     fn read_prg_rom(&self, mut addr: u16) -> u8 {
         addr -= 0x8000;
 
-        if self.prg_rom.len() == 0x4000 && addr >= 0x4000 {
+        if self.prg_rom.len() == 0x4000 && addr >= 0x4000
+        {
             addr = addr % 0x4000;
         }
 

@@ -11,7 +11,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use memory::Memory;
-use ppu::Frame;
+use ppu::frame::Frame;
 use rand::rngs::StdRng;
 use rand::Rng;
 use rand::SeedableRng;
@@ -30,9 +30,16 @@ mod opcodes;
 mod ppu;
 mod rom;
 
+use std::env;
+
 fn main() {
+    let args: Vec<String> = env::args().collect();
+
+    assert!(args.len() == 2);
+
     // Setup ROM
-    let rom_filename = "smb.nes";
+    let rom_filename = &args[1];
+    let romname = &rom_filename[0..rom_filename.len() - 4];
 
     let mut rom_file = File::open(&rom_filename).expect("Error: Cannot find ROM file");
     let rom_size = std::fs::metadata(&rom_filename)
@@ -53,7 +60,7 @@ fn main() {
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
     let window = video_subsystem
-        .window("Pacman", (256.0 * 3.0) as u32, (240.0 * 3.0) as u32)
+        .window(&romname, (256.0 * 3.0) as u32, (240.0 * 3.0) as u32)
         .position_centered()
         .build()
         .unwrap();
@@ -80,25 +87,32 @@ fn main() {
         canvas.copy(&texture, None, None).unwrap();
         canvas.present();
 
-        for event in event_pump.poll_iter() {
-            match event {
+        for event in event_pump.poll_iter()
+        {
+            match event
+            {
                 Event::Quit { .. }
                 | Event::KeyDown {
                     keycode: Some(Keycode::Escape),
                     ..
                 } => std::process::exit(0),
 
-                Event::KeyDown { keycode, .. } => {
-                    if let Some(key) = keycode {
+                Event::KeyDown { keycode, .. } =>
+                {
+                    if let Some(key) = keycode
+                    {
                         controller.set_controller_key(key, true);
                     }
                 }
-                Event::KeyUp { keycode, .. } => {
-                    if let Some(key) = keycode {
+                Event::KeyUp { keycode, .. } =>
+                {
+                    if let Some(key) = keycode
+                    {
                         controller.set_controller_key(key, false);
                     }
                 }
-                _ => { /* do nothing */ }
+                _ =>
+                {}
             }
         }
     });

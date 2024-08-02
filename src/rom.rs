@@ -82,13 +82,12 @@ impl ROMHeader {
             .control_byte_1
             .contains(ControlByte1::VERTICAL_MIRRORING);
 
-        let mirroring = match (four_screen, vertical_mirroring) {
+        let mirroring = match (four_screen, vertical_mirroring)
+        {
             (true, _) => MirroringType::FourScreen,
             (false, true) => MirroringType::Vertical,
             (false, false) => MirroringType::Horizontal,
         };
-
-        // assert!(mirroring == MirroringType::Vertical);
 
         mirroring
     }

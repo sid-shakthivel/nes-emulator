@@ -23,6 +23,8 @@ bitflags! {
     }
 }
 
+const STACK_POINTER: u8 = 0xFD;
+
 pub struct CPU<'a> {
     pc: u16,
     acc: u8,
@@ -31,82 +33,66 @@ pub struct CPU<'a> {
     sp: u8,
     status: StatusFlags,
     cycles: u32,
-    memory: [u8; 0xFFFF],
-    memory_unit: Rc<RefCell<Memory<'a>>>,
+    memory: Rc<RefCell<Memory<'a>>>,
 }
 
 impl<'a> CPU<'a> {
     pub fn new(memory_unit: Rc<RefCell<Memory<'a>>>) -> Self {
-        let mut initial_status = StatusFlags::empty();
-        initial_status.set(StatusFlags::UNUSED, true);
-        initial_status.set(StatusFlags::INTERRUPT_DISABLE, true);
-
-        /*
-            For snake, remove setting status registers
-            and pc is 0x600
-
-            For nestest pc is 0xC000
-        */
+        // For nestest, pc must be set to 0xC000
 
         CPU {
             pc: 0,
             acc: 0,
             reg_x: 0,
             reg_y: 0,
-            sp: 0xfd,
-            status: initial_status,
+            sp: STACK_POINTER,
+            status: StatusFlags::empty(),
             cycles: 0,
-            memory: [0; 0xFFFF],
-            memory_unit,
+            memory: memory_unit,
         }
     }
 
     pub fn reset(&mut self) {
+        let mut status = StatusFlags::empty();
+        status.set(StatusFlags::UNUSED, true);
+        status.set(StatusFlags::INTERRUPT_DISABLE, true);
+
+        self.status = status;
         self.pc = self.read_mem_u16(0xFFFC);
     }
 
-    fn update_operand_cycles(
-        &mut self,
-        opcode_data: &Opcode,
-        does_branch: bool,
-        old_pc: u16,
-    ) -> u32 {
+    fn update_operand_cycles(&mut self, opcode_data: &Instruction, does_branch: bool, old_pc: u16) -> u32 {
         let opcode = &opcode_data.instruction;
         let address_mode = opcode_data.address_mode;
 
-        let mut cycles = 0;
+        let mut cycles = if does_branch { 1 } else { 0 };
 
-        if does_branch {
-            cycles += 1;
-        }
-
-        match opcode {
-            Instruction::ADC
-            | Instruction::AND
-            | Instruction::CMP
-            | Instruction::EOR
-            | Instruction::LDA
-            | Instruction::ORA
-            | Instruction::LDY
-            | Instruction::LDX
-            | Instruction::SBC => match address_mode {
-                AddressMode::AbsoluteX => {
+        match opcode
+        {
+            Opcode::ADC | Opcode::AND | Opcode::CMP | Opcode::EOR | Opcode::LDA | Opcode::ORA | Opcode::LDY | Opcode::LDX | Opcode::SBC => match address_mode
+            {
+                AddressMode::AbsoluteX =>
+                {
                     let addr = self.read_mem_u16(old_pc);
                     let upd_addr = addr.wrapping_add(self.reg_x as u16);
 
-                    if self.is_new_page(upd_addr, addr) {
+                    if self.is_new_page(upd_addr, addr)
+                    {
                         cycles += 1;
                     }
                 }
-                AddressMode::AbsoluteY => {
+                AddressMode::AbsoluteY =>
+                {
                     let addr = self.read_mem_u16(old_pc);
                     let upd_addr = addr.wrapping_add(self.reg_y as u16);
 
-                    if self.is_new_page(upd_addr, addr) {
+                    if self.is_new_page(upd_addr, addr)
+                    {
                         cycles += 1;
                     }
                 }
-                AddressMode::IndirectY => {
+                AddressMode::IndirectY =>
+                {
                     let base = self.read_mem(old_pc);
 
                     let lo = self.read_mem(base as u16);
@@ -115,62 +101,63 @@ impl<'a> CPU<'a> {
                     let deref_base = (hi as u16) << 8 | (lo as u16);
                     let deref_addr = deref_base.wrapping_add(self.reg_y as u16);
 
-                    if self.is_new_page(deref_addr, deref_base) {
+                    if self.is_new_page(deref_addr, deref_base)
+                    {
                         cycles += 1;
                     }
                 }
-                _ => {}
+                _ =>
+                {}
             },
-            Instruction::BCC
-            | Instruction::BCS
-            | Instruction::BEQ
-            | Instruction::BMI
-            | Instruction::BNE
-            | Instruction::BPL
-            | Instruction::BVC
-            | Instruction::BVS => {
+            Opcode::BCC | Opcode::BCS | Opcode::BEQ | Opcode::BMI | Opcode::BNE | Opcode::BPL | Opcode::BVC | Opcode::BVS =>
+            {
                 let offset = self.read_mem(old_pc) as i8;
                 let addr = (old_pc as i16).wrapping_add(offset as i16) as u16;
 
-                if self.is_new_page(old_pc + 1, addr + 1) && does_branch {
+                if self.is_new_page(old_pc + 1, addr + 1) && does_branch
+                {
                     cycles += 1;
                 }
-
-                // if self.cycles == 89081 {
-                //     panic!("cycles is {}", cycles);
-                // }
             }
-            _ => {}
+            _ =>
+            {}
         }
 
         cycles
     }
 
-    fn get_operand_addr(&mut self, opcode: &Opcode) -> u16 {
-        match opcode.address_mode {
+    fn get_operand_addr(&mut self, opcode: &Instruction) -> u16 {
+        match opcode.address_mode
+        {
             AddressMode::Absolute => self.read_mem_u16(self.pc),
-            AddressMode::AbsoluteX => {
+            AddressMode::AbsoluteX =>
+            {
                 let addr = self.read_mem_u16(self.pc);
                 addr.wrapping_add(self.reg_x as u16)
             }
-            AddressMode::AbsoluteY => {
+            AddressMode::AbsoluteY =>
+            {
                 let addr = self.read_mem_u16(self.pc);
                 addr.wrapping_add(self.reg_y as u16)
             }
             AddressMode::ZeroPage => self.read_mem(self.pc) as u16,
-            AddressMode::ZeroPageX => {
+            AddressMode::ZeroPageX =>
+            {
                 let addr = self.read_mem(self.pc);
                 addr.wrapping_add(self.reg_x) as u16
             }
-            AddressMode::ZeroPageY => {
+            AddressMode::ZeroPageY =>
+            {
                 let addr = self.read_mem(self.pc);
                 addr.wrapping_add(self.reg_y) as u16
             }
-            AddressMode::Relative => {
+            AddressMode::Relative =>
+            {
                 let offset = self.read_mem(self.pc) as i8;
                 (self.pc as i16).wrapping_add(offset as i16) as u16
             }
-            AddressMode::Indirect => {
+            AddressMode::Indirect =>
+            {
                 let addr = self.read_mem(self.pc);
 
                 let lo = self.read_mem(addr as u16);
@@ -178,7 +165,8 @@ impl<'a> CPU<'a> {
 
                 (hi as u16) << 8 | (lo as u16)
             }
-            AddressMode::IndirectX => {
+            AddressMode::IndirectX =>
+            {
                 let base = self.read_mem(self.pc);
                 let ptr = base.wrapping_add(self.reg_x);
 
@@ -187,7 +175,8 @@ impl<'a> CPU<'a> {
 
                 (hi as u16) << 8 | (lo as u16)
             }
-            AddressMode::IndirectY => {
+            AddressMode::IndirectY =>
+            {
                 let base = self.read_mem(self.pc);
 
                 let lo = self.read_mem(base as u16);
@@ -203,12 +192,12 @@ impl<'a> CPU<'a> {
         }
     }
 
-    pub fn read_mem(&self, addr: u16) -> u8 {
-        self.memory_unit.borrow_mut().read_mem(addr)
+    fn read_mem(&self, addr: u16) -> u8 {
+        self.memory.borrow_mut().read_mem(addr)
     }
 
-    pub fn write_mem(&mut self, addr: u16, value: u8) {
-        self.memory_unit.borrow_mut().write_mem(addr, value);
+    fn write_mem(&mut self, addr: u16, value: u8) {
+        self.memory.borrow_mut().write_mem(addr, value);
     }
 
     /*
@@ -216,17 +205,16 @@ impl<'a> CPU<'a> {
        0x1234 is stored as 0x34, 0x12
     */
     fn read_mem_u16(&mut self, addr: u16) -> u16 {
-        self.memory_unit.borrow_mut().read_mem_u16(addr)
+        self.memory.borrow_mut().read_mem_u16(addr)
     }
 
     fn write_mem_u16(&mut self, addr: u16, data: u16) {
-        self.memory_unit.borrow_mut().write_mem_u16(addr, data);
+        self.memory.borrow_mut().write_mem_u16(addr, data);
     }
 
     fn push_stack(&mut self, value: u8) {
         let addr = 0x0100 + self.sp as u16;
-        // self.memory[addr as usize] = value;
-        self.memory_unit.borrow_mut().write_mem(addr, value);
+        self.memory.borrow_mut().write_mem(addr, value);
 
         self.sp = self.sp.wrapping_sub(1);
     }
@@ -235,13 +223,7 @@ impl<'a> CPU<'a> {
         self.sp = self.sp.wrapping_add(1);
 
         let addr = 0x0100 + self.sp as u16;
-        // self.memory[addr as usize]
-        self.memory_unit.borrow_mut().read_mem(addr)
-    }
-
-    pub fn load_6502_program(&mut self, program: Vec<u8>) {
-        self.memory[0x0600..(0x0600 + program.len())].copy_from_slice(&program[..]);
-        self.write_mem_u16(0xFFFC, 0x0600);
+        self.memory.borrow_mut().read_mem(addr)
     }
 
     fn is_new_page(&self, addr_a: u16, addr_b: u16) -> bool {
@@ -261,16 +243,17 @@ impl<'a> CPU<'a> {
 
         self.update_interrupt_flag(true);
 
-        // self.pc = (self.read_mem(0xFFFF) as u16) << 8 | (self.read_mem(0xFFFE) as u16);
         self.cycles += 2;
-        self.memory_unit.borrow_mut().update_ppu_cycles(2);
+        self.memory.borrow_mut().update_ppu_cycles(2);
 
         self.pc = self.read_mem_u16(0xFFFA);
     }
 
     pub fn run(&mut self) {
-        loop {
-            if self.memory_unit.borrow_mut().get_nmi() == 1 {
+        loop
+        {
+            if self.memory.borrow_mut().get_nmi() == 1
+            {
                 self.nmi();
             }
 
@@ -278,27 +261,24 @@ impl<'a> CPU<'a> {
         }
     }
 
+    fn print_state(&self, opcode: u8, instruction: &Instruction) {
+        println!(
+            "{:?} {:?} {:#X} {:#X} {:#X} {:#X} {:#X} {:#X} {}",
+            instruction.instruction,
+            instruction.address_mode,
+            opcode,
+            self.pc,
+            self.reg_x,
+            self.reg_y,
+            self.acc,
+            self.status.bits(),
+            self.cycles
+        );
+    }
+
     pub fn interpret(&mut self) {
-        let opcode = self.memory_unit.borrow_mut().read_mem(self.pc);
-
-        let opcode_data = &CPU_OPCODES[opcode as usize];
-
-        // println!(
-        //     "{:?} {:?} {:#X} {:#X} {:#X} {:#X} {:#X} {:#X} {}",
-        //     opcode_data.instruction,
-        //     opcode_data.address_mode,
-        //     opcode,
-        //     self.pc,
-        //     self.reg_x,
-        //     self.reg_y,
-        //     self.acc,
-        //     self.status.bits(),
-        //     self.cycles
-        // );
-
-        if self.cycles >= 117948 {
-            // panic!("have reached a point of difference");
-        }
+        let opcode = self.memory.borrow_mut().read_mem(self.pc);
+        let instruction = &CPU_OPCODES[opcode as usize];
 
         self.pc += 1;
 
@@ -306,10 +286,12 @@ impl<'a> CPU<'a> {
         let mut update_pc: bool = true;
         let mut does_branch = false;
 
-        match opcode_data.instruction {
-            Instruction::ADC => {
-                let addr = self.get_operand_addr(opcode_data);
-                let operand = self.get_operand(addr, opcode_data.address_mode);
+        match instruction.instruction
+        {
+            Opcode::ADC =>
+            {
+                let addr = self.get_operand_addr(instruction);
+                let operand = self.get_operand(addr, instruction.address_mode);
 
                 let carry_in = self.status.contains(StatusFlags::CARRY) as u8;
                 let sum = self.acc as u16 + operand as u16 + carry_in as u16;
@@ -324,296 +306,326 @@ impl<'a> CPU<'a> {
 
                 self.acc = result;
             }
-            Instruction::AND => {
+            Opcode::AND =>
+            {
                 // Performs logical AND on accumulator and memory
-                let addr = self.get_operand_addr(opcode_data);
-                self.acc &= self.get_operand(addr, opcode_data.address_mode);
+                let addr = self.get_operand_addr(instruction);
+                self.acc &= self.get_operand(addr, instruction.address_mode);
 
                 self.update_zero_flag(self.acc);
                 self.update_negative_flag(self.acc);
             }
-            Instruction::ASL => {
+            Opcode::ASL =>
+            {
                 // Shifts left one bit (* 2)
-                let addr = self.get_operand_addr(opcode_data);
-                let operand = self.get_operand(addr, opcode_data.address_mode);
+                let addr = self.get_operand_addr(instruction);
+                let operand = self.get_operand(addr, instruction.address_mode);
                 let result = operand << 1;
 
                 self.update_carry_flag(operand & 0b1000_0000 != 0);
                 self.update_zero_flag(result);
                 self.update_negative_flag(result);
 
-                self.write_operand(addr, result, opcode_data.address_mode);
+                self.write_operand(addr, result, instruction.address_mode);
             }
-            Instruction::BCC => {
+            Opcode::BCC =>
+            {
                 // If carry is clear, branch
-                if !self.status.contains(StatusFlags::CARRY) {
-                    assert!(opcode_data.address_mode == AddressMode::Relative);
-                    self.pc = self.get_operand_addr(opcode_data);
+                if !self.status.contains(StatusFlags::CARRY)
+                {
+                    assert!(instruction.address_mode == AddressMode::Relative);
+                    self.pc = self.get_operand_addr(instruction);
                     does_branch = true;
                 }
             }
-            Instruction::BCS => {
+            Opcode::BCS =>
+            {
                 // If carry is set, branch
-                if self.status.contains(StatusFlags::CARRY) {
-                    assert!(opcode_data.address_mode == AddressMode::Relative);
-                    self.pc = self.get_operand_addr(opcode_data);
+                if self.status.contains(StatusFlags::CARRY)
+                {
+                    assert!(instruction.address_mode == AddressMode::Relative);
+                    self.pc = self.get_operand_addr(instruction);
                     does_branch = true;
                 }
             }
-            Instruction::BEQ => {
+            Opcode::BEQ =>
+            {
                 // If zero is set, branch
-                if self.status.contains(StatusFlags::ZERO) {
-                    assert!(opcode_data.address_mode == AddressMode::Relative);
-                    self.pc = self.get_operand_addr(opcode_data);
+                if self.status.contains(StatusFlags::ZERO)
+                {
+                    assert!(instruction.address_mode == AddressMode::Relative);
+                    self.pc = self.get_operand_addr(instruction);
                     does_branch = true;
                 }
             }
-            Instruction::BIT => {
+            Opcode::BIT =>
+            {
                 // Tests accumulator against memory
-                let addr = self.get_operand_addr(opcode_data);
+                let addr = self.get_operand_addr(instruction);
                 let value = self.read_mem(addr);
 
                 self.update_negative_flag(value);
                 self.update_zero_flag(value & self.acc);
                 self.update_overflow_flag((value >> 6) & 1 != 0);
             }
-            Instruction::BMI => {
+            Opcode::BMI =>
+            {
                 // If negative is set, branch
-                if self.status.contains(StatusFlags::NEGATIVE) {
-                    assert!(opcode_data.address_mode == AddressMode::Relative);
-                    self.pc = self.get_operand_addr(opcode_data);
+                if self.status.contains(StatusFlags::NEGATIVE)
+                {
+                    assert!(instruction.address_mode == AddressMode::Relative);
+                    self.pc = self.get_operand_addr(instruction);
                     does_branch = true;
                 }
             }
-            Instruction::BNE => {
+            Opcode::BNE =>
+            {
                 // If zero is not set, branch
-                if !self.status.contains(StatusFlags::ZERO) {
-                    assert!(opcode_data.address_mode == AddressMode::Relative);
-                    self.pc = self.get_operand_addr(opcode_data);
+                if !self.status.contains(StatusFlags::ZERO)
+                {
+                    assert!(instruction.address_mode == AddressMode::Relative);
+                    self.pc = self.get_operand_addr(instruction);
                     does_branch = true;
                 }
             }
-            Instruction::BPL => {
+            Opcode::BPL =>
+            {
                 // If negative is not set, branch
-                if !self.status.contains(StatusFlags::NEGATIVE) {
-                    assert!(opcode_data.address_mode == AddressMode::Relative);
-                    self.pc = self.get_operand_addr(opcode_data);
+                if !self.status.contains(StatusFlags::NEGATIVE)
+                {
+                    assert!(instruction.address_mode == AddressMode::Relative);
+                    self.pc = self.get_operand_addr(instruction);
                     does_branch = true;
                 }
             }
-            Instruction::BRK => {
-                // self.pc += 2;
-
-                // self.push_stack((self.pc >> 8) as u8); // Push high byte of PC
-                // self.push_stack(self.pc as u8); // Push low byte of PC
-
-                // self.status.set(StatusFlags::B_FLAG, true);
-                // self.push_stack(self.status.bits());
-                // self.update_interrupt_flag(true);
-
-                // self.pc = (self.read_mem(0xFFFF) as u16) << 8 | (self.read_mem(0xFFFE) as u16);
-                // println!("reached break {:#X}", self.pc);
-
-                std::process::exit(0);
+            Opcode::BRK =>
+            {
+                self.nmi();
+                update_pc = false;
             }
-            Instruction::BVC => {
+            Opcode::BVC =>
+            {
                 // If overflow is clear, branch
-                if !self.status.contains(StatusFlags::OVERFLOW) {
-                    assert!(opcode_data.address_mode == AddressMode::Relative);
-                    self.pc = self.get_operand_addr(opcode_data);
+                if !self.status.contains(StatusFlags::OVERFLOW)
+                {
+                    assert!(instruction.address_mode == AddressMode::Relative);
+                    self.pc = self.get_operand_addr(instruction);
                     does_branch = true;
                 }
             }
-            Instruction::BVS => {
+            Opcode::BVS =>
+            {
                 // If overflow is set, branch
-                if self.status.contains(StatusFlags::OVERFLOW) {
-                    assert!(opcode_data.address_mode == AddressMode::Relative);
-                    self.pc = self.get_operand_addr(opcode_data);
+                if self.status.contains(StatusFlags::OVERFLOW)
+                {
+                    assert!(instruction.address_mode == AddressMode::Relative);
+                    self.pc = self.get_operand_addr(instruction);
                     does_branch = true;
                 }
             }
-            Instruction::CLC => {
+            Opcode::CLC =>
+            {
                 // Clears carry
                 self.status.remove(StatusFlags::CARRY);
             }
-            Instruction::CLD => {
+            Opcode::CLD =>
+            {
                 // Clears decimal
                 self.status.remove(StatusFlags::DECIMAL);
             }
-            Instruction::CLI => {
+            Opcode::CLI =>
+            {
                 // Clears interrupt disable
                 self.status.remove(StatusFlags::INTERRUPT_DISABLE);
             }
-            Instruction::CLV => {
+            Opcode::CLV =>
+            {
                 // Clears overflow
                 self.status.remove(StatusFlags::OVERFLOW);
             }
-            Instruction::CMP => {
+            Opcode::CMP =>
+            {
                 // Compares accumulator to memory
-                let addr = self.get_operand_addr(opcode_data);
-                let operand = self.get_operand(addr, opcode_data.address_mode);
+                let addr = self.get_operand_addr(instruction);
+                let operand = self.get_operand(addr, instruction.address_mode);
 
                 self.update_carry_flag(self.acc >= operand);
                 self.update_zero_flag((self.acc.wrapping_sub(operand)) as u8);
                 self.update_negative_flag((self.acc.wrapping_sub(operand)) as u8);
             }
-            Instruction::CPX => {
+            Opcode::CPX =>
+            {
                 // Compares x to memory
-                let addr = self.get_operand_addr(opcode_data);
-                let operand = self.get_operand(addr, opcode_data.address_mode);
+                let addr = self.get_operand_addr(instruction);
+                let operand = self.get_operand(addr, instruction.address_mode);
 
                 self.update_carry_flag(self.reg_x >= operand);
                 self.update_zero_flag((self.reg_x.wrapping_sub(operand)) as u8);
                 self.update_negative_flag((self.reg_x.wrapping_sub(operand)) as u8);
             }
-            Instruction::CPY => {
+            Opcode::CPY =>
+            {
                 // Compares y to memory
-                let addr = self.get_operand_addr(opcode_data);
-                let operand = self.get_operand(addr, opcode_data.address_mode);
+                let addr = self.get_operand_addr(instruction);
+                let operand = self.get_operand(addr, instruction.address_mode);
 
                 self.update_carry_flag(self.reg_y >= operand);
                 self.update_zero_flag((self.reg_y.wrapping_sub(operand)) as u8);
                 self.update_negative_flag((self.reg_y.wrapping_sub(operand)) as u8);
             }
-            Instruction::DEC => {
+            Opcode::DEC =>
+            {
                 // Decrement memory
-                let addr = self.get_operand_addr(opcode_data);
-                let value = self
-                    .get_operand(addr, opcode_data.address_mode)
-                    .wrapping_sub(1);
+                let addr = self.get_operand_addr(instruction);
+                let value = self.get_operand(addr, instruction.address_mode).wrapping_sub(1);
                 self.write_mem(addr, value);
 
                 self.update_negative_flag(value);
                 self.update_zero_flag(value);
             }
-            Instruction::DEX => {
+            Opcode::DEX =>
+            {
                 // Decrement x
                 self.reg_x = self.reg_x.wrapping_sub(1);
                 self.update_negative_flag(self.reg_x);
                 self.update_zero_flag(self.reg_x);
             }
-            Instruction::DEY => {
+            Opcode::DEY =>
+            {
                 // Decrement y
                 self.reg_y = self.reg_y.wrapping_sub(1);
                 self.update_negative_flag(self.reg_y);
                 self.update_zero_flag(self.reg_y);
             }
-            Instruction::EOR => {
+            Opcode::EOR =>
+            {
                 // Performs exclusive or on accumulator and memory
-                let addr = self.get_operand_addr(opcode_data);
-                self.acc ^= self.get_operand(addr, opcode_data.address_mode);
+                let addr = self.get_operand_addr(instruction);
+                self.acc ^= self.get_operand(addr, instruction.address_mode);
 
                 self.update_negative_flag(self.acc);
                 self.update_zero_flag(self.acc);
             }
-            Instruction::INC => {
+            Opcode::INC =>
+            {
                 // Increment memory
-                let addr = self.get_operand_addr(opcode_data);
-                let value = self
-                    .get_operand(addr, opcode_data.address_mode)
-                    .wrapping_add(1);
+                let addr = self.get_operand_addr(instruction);
+                let value = self.get_operand(addr, instruction.address_mode).wrapping_add(1);
                 self.write_mem(addr, value);
 
                 self.update_negative_flag(value);
                 self.update_zero_flag(value);
             }
-            Instruction::INX => {
+            Opcode::INX =>
+            {
                 // Increment x
                 self.reg_x = self.reg_x.wrapping_add(1);
                 self.update_negative_flag(self.reg_x);
                 self.update_zero_flag(self.reg_x);
             }
-            Instruction::INY => {
+            Opcode::INY =>
+            {
                 // Increment y
                 self.reg_y = self.reg_y.wrapping_add(1);
                 self.update_negative_flag(self.reg_y);
                 self.update_zero_flag(self.reg_y);
             }
-            Instruction::JMP => {
+            Opcode::JMP =>
+            {
                 // Sets program counter to address
 
-                if opcode == 0x6c {
+                if opcode == 0x6c
+                {
                     let mem_addr = self.read_mem_u16(self.pc);
 
-                    let indirect_ref = if mem_addr & 0x00FF == 0x00FF {
+                    let indirect_ref = if mem_addr & 0x00FF == 0x00FF
+                    {
                         let lo = self.read_mem(mem_addr);
                         let hi = self.read_mem(mem_addr & 0xFF00);
                         (hi as u16) << 8 | (lo as u16)
-                    } else {
+                    }
+                    else
+                    {
                         self.read_mem_u16(mem_addr)
                     };
 
                     self.pc = indirect_ref;
-                } else {
-                    self.pc = self.get_operand_addr(opcode_data);
+                }
+                else
+                {
+                    self.pc = self.get_operand_addr(instruction);
                 }
 
                 update_pc = false;
             }
-            Instruction::JSR => {
+            Opcode::JSR =>
+            {
                 // Pushes current program counter to stack and sets program counter to address
-                assert!(opcode_data.address_mode == AddressMode::Absolute);
+                assert!(instruction.address_mode == AddressMode::Absolute);
 
                 let addr_to_push = self.pc + 1;
 
                 self.push_stack((addr_to_push >> 8) as u8);
                 self.push_stack((addr_to_push & 0xFF) as u8);
 
-                let addr = self.get_operand_addr(opcode_data);
+                let addr = self.get_operand_addr(instruction);
 
                 self.pc = addr;
 
                 update_pc = false;
             }
-            Instruction::LDA => {
+            Opcode::LDA =>
+            {
                 // Loads byte of memory into accumulator
-                let mut addr = self.get_operand_addr(opcode_data);
+                let mut addr = self.get_operand_addr(instruction);
 
-                if self.cycles == 955829 {
-                    // panic!("cycles {:#X}", addr);
-                }
-
-                self.acc = self.get_operand(addr, opcode_data.address_mode);
+                self.acc = self.get_operand(addr, instruction.address_mode);
 
                 self.update_negative_flag(self.acc);
                 self.update_zero_flag(self.acc);
             }
-            Instruction::LDX => {
+            Opcode::LDX =>
+            {
                 // Loads byte of memory into x
-                let addr = self.get_operand_addr(opcode_data);
-                self.reg_x = self.get_operand(addr, opcode_data.address_mode);
+                let addr = self.get_operand_addr(instruction);
+                self.reg_x = self.get_operand(addr, instruction.address_mode);
 
                 self.update_negative_flag(self.reg_x);
                 self.update_zero_flag(self.reg_x);
             }
-            Instruction::LDY => {
+            Opcode::LDY =>
+            {
                 // Loads byte of memory into y
-                let addr = self.get_operand_addr(opcode_data);
-                self.reg_y = self.get_operand(addr, opcode_data.address_mode);
+                let addr = self.get_operand_addr(instruction);
+                self.reg_y = self.get_operand(addr, instruction.address_mode);
 
                 self.update_negative_flag(self.reg_y);
                 self.update_zero_flag(self.reg_y);
             }
-            Instruction::LSR => {
-                let addr = self.get_operand_addr(opcode_data);
-                let operand = self.get_operand(addr, opcode_data.address_mode);
+            Opcode::LSR =>
+            {
+                let addr = self.get_operand_addr(instruction);
+                let operand = self.get_operand(addr, instruction.address_mode);
                 let result = operand >> 1;
 
                 self.update_carry_flag(operand & 0b0000_0001 != 0);
                 self.update_zero_flag(result);
                 self.update_negative_flag(result);
 
-                self.write_operand(addr, result, opcode_data.address_mode);
+                self.write_operand(addr, result, instruction.address_mode);
             }
-            Instruction::NOP => {
-                if opcode_data.address_mode == AddressMode::Absolute {
-                    let addr = self.get_operand_addr(opcode_data);
+            Opcode::NOP =>
+            {
+                if instruction.address_mode == AddressMode::Absolute
+                {
+                    let addr = self.get_operand_addr(instruction);
                     let data = self.read_mem(addr);
                 }
             }
-            Instruction::ORA => {
-                let addr = self.get_operand_addr(opcode_data);
-                let operand = self.get_operand(addr, opcode_data.address_mode);
+            Opcode::ORA =>
+            {
+                let addr = self.get_operand_addr(instruction);
+                let operand = self.get_operand(addr, instruction.address_mode);
                 let result = self.acc | operand;
 
                 self.update_zero_flag(result);
@@ -621,32 +633,37 @@ impl<'a> CPU<'a> {
 
                 self.acc = result;
             }
-            Instruction::PHA => {
+            Opcode::PHA =>
+            {
                 self.push_stack(self.acc);
             }
-            Instruction::PHP => {
+            Opcode::PHP =>
+            {
                 let mut flags = self.status.clone();
                 flags.insert(StatusFlags::B_FLAG);
                 flags.insert(StatusFlags::UNUSED);
 
                 self.push_stack(flags.bits());
             }
-            Instruction::PLA => {
+            Opcode::PLA =>
+            {
                 self.acc = self.pop_stack();
 
                 self.update_zero_flag(self.acc);
                 self.update_negative_flag(self.acc);
             }
-            Instruction::PLP => {
+            Opcode::PLP =>
+            {
                 let flags_from_stack = StatusFlags::from_bits(self.pop_stack()).unwrap();
                 self.status = flags_from_stack;
 
                 self.status.remove(StatusFlags::B_FLAG);
                 self.status.insert(StatusFlags::UNUSED);
             }
-            Instruction::ROL => {
-                let addr = self.get_operand_addr(opcode_data);
-                let operand = self.get_operand(addr, opcode_data.address_mode);
+            Opcode::ROL =>
+            {
+                let addr = self.get_operand_addr(instruction);
+                let operand = self.get_operand(addr, instruction.address_mode);
 
                 let old_carry = self.status.contains(StatusFlags::CARRY) as u8;
 
@@ -654,17 +671,19 @@ impl<'a> CPU<'a> {
 
                 let result = old_carry | (operand << 1);
 
-                self.write_operand(addr, result, opcode_data.address_mode);
+                self.write_operand(addr, result, instruction.address_mode);
 
-                if opcode_data.address_mode == AddressMode::Accumulator {
+                if instruction.address_mode == AddressMode::Accumulator
+                {
                     self.update_zero_flag(result);
                 }
 
                 self.update_negative_flag(result);
             }
-            Instruction::ROR => {
-                let addr = self.get_operand_addr(opcode_data);
-                let operand = self.get_operand(addr, opcode_data.address_mode);
+            Opcode::ROR =>
+            {
+                let addr = self.get_operand_addr(instruction);
+                let operand = self.get_operand(addr, instruction.address_mode);
 
                 let carry = self.status.contains(StatusFlags::CARRY) as u8;
 
@@ -672,10 +691,11 @@ impl<'a> CPU<'a> {
 
                 let result = (operand >> 1) | (carry << 7);
 
-                self.write_operand(addr, result, opcode_data.address_mode);
+                self.write_operand(addr, result, instruction.address_mode);
                 self.update_negative_flag(result);
             }
-            Instruction::RTI => {
+            Opcode::RTI =>
+            {
                 self.status = StatusFlags::from_bits(self.pop_stack()).unwrap();
 
                 self.status.remove(StatusFlags::B_FLAG);
@@ -684,13 +704,15 @@ impl<'a> CPU<'a> {
                 self.pc = self.pop_stack() as u16 | ((self.pop_stack() as u16) << 8);
                 update_pc = false;
             }
-            Instruction::RTS => {
+            Opcode::RTS =>
+            {
                 self.pc = (self.pop_stack() as u16 | ((self.pop_stack() as u16) << 8)) + 1;
                 update_pc = false;
             }
-            Instruction::SBC => {
-                let addr = self.get_operand_addr(opcode_data);
-                let operand = self.get_operand(addr, opcode_data.address_mode);
+            Opcode::SBC =>
+            {
+                let addr = self.get_operand_addr(instruction);
+                let operand = self.get_operand(addr, instruction.address_mode);
 
                 let carry_in = self.status.contains(StatusFlags::CARRY) as u8;
                 let value = operand ^ 0xFF;
@@ -705,66 +727,74 @@ impl<'a> CPU<'a> {
 
                 self.acc = result;
             }
-            Instruction::SEC => {
+            Opcode::SEC =>
+            {
                 self.update_carry_flag(true);
             }
-            Instruction::SED => {
+            Opcode::SED =>
+            {
                 self.update_decimal_flag(true);
             }
-            Instruction::SEI => {
+            Opcode::SEI =>
+            {
                 self.update_interrupt_flag(true);
             }
-            Instruction::STA => {
-                let mut addr = self.get_operand_addr(opcode_data);
-
-                // if self.pc == 0xEE09 {
-                //     println!("storing {:#X}", self.acc);
-                // }
-
+            Opcode::STA =>
+            {
+                let mut addr = self.get_operand_addr(instruction);
                 self.write_mem(addr, self.acc);
             }
-            Instruction::STX => {
-                let addr = self.get_operand_addr(opcode_data);
+            Opcode::STX =>
+            {
+                let addr = self.get_operand_addr(instruction);
                 self.write_mem(addr, self.reg_x);
             }
-            Instruction::STY => {
-                let addr = self.get_operand_addr(opcode_data);
+            Opcode::STY =>
+            {
+                let addr = self.get_operand_addr(instruction);
                 self.write_mem(addr, self.reg_y);
             }
-            Instruction::TAX => {
+            Opcode::TAX =>
+            {
                 self.reg_x = self.acc;
                 self.update_negative_flag(self.reg_x);
                 self.update_zero_flag(self.reg_x);
             }
-            Instruction::TAY => {
+            Opcode::TAY =>
+            {
                 self.reg_y = self.acc;
                 self.update_negative_flag(self.reg_y);
                 self.update_zero_flag(self.reg_y);
             }
-            Instruction::TSX => {
+            Opcode::TSX =>
+            {
                 self.reg_x = self.sp;
                 self.update_negative_flag(self.reg_x);
                 self.update_zero_flag(self.reg_x);
             }
-            Instruction::TXA => {
+            Opcode::TXA =>
+            {
                 self.acc = self.reg_x;
                 self.update_negative_flag(self.acc);
                 self.update_zero_flag(self.acc);
             }
-            Instruction::TXS => {
+            Opcode::TXS =>
+            {
                 self.sp = self.reg_x;
             }
-            Instruction::TYA => {
+            Opcode::TYA =>
+            {
                 self.acc = self.reg_y;
                 self.update_negative_flag(self.acc);
                 self.update_zero_flag(self.acc);
             }
-            Instruction::SLO => {
-                let addr = self.get_operand_addr(opcode_data);
-                let operand = self.get_operand(addr, opcode_data.address_mode);
+            Opcode::SLO =>
+            {
+                let addr = self.get_operand_addr(instruction);
+                let operand = self.get_operand(addr, instruction.address_mode);
                 let mut result = operand << 1;
 
-                self.write_operand(addr, result, opcode_data.address_mode);
+                self.write_operand(addr, result, instruction.address_mode);
 
                 result |= self.acc;
 
@@ -774,9 +804,10 @@ impl<'a> CPU<'a> {
 
                 self.acc = result;
             }
-            Instruction::RLA => {
-                let addr = self.get_operand_addr(opcode_data);
-                let operand = self.get_operand(addr, opcode_data.address_mode);
+            Opcode::RLA =>
+            {
+                let addr = self.get_operand_addr(instruction);
+                let operand = self.get_operand(addr, instruction.address_mode);
 
                 let carry = self.status.contains(StatusFlags::CARRY) as u8;
 
@@ -784,7 +815,7 @@ impl<'a> CPU<'a> {
 
                 let mut result = carry | (operand << 1);
 
-                self.write_operand(addr, result, opcode_data.address_mode);
+                self.write_operand(addr, result, instruction.address_mode);
 
                 self.update_negative_flag(result);
 
@@ -792,12 +823,13 @@ impl<'a> CPU<'a> {
 
                 self.acc = result;
             }
-            Instruction::SRE => {
-                let addr = self.get_operand_addr(opcode_data);
-                let operand = self.get_operand(addr, opcode_data.address_mode);
+            Opcode::SRE =>
+            {
+                let addr = self.get_operand_addr(instruction);
+                let operand = self.get_operand(addr, instruction.address_mode);
                 let mut result = operand >> 1;
 
-                self.write_operand(addr, result, opcode_data.address_mode);
+                self.write_operand(addr, result, instruction.address_mode);
 
                 result ^= self.acc;
 
@@ -807,9 +839,10 @@ impl<'a> CPU<'a> {
 
                 self.acc = result;
             }
-            Instruction::RRA => {
-                let addr = self.get_operand_addr(opcode_data);
-                let operand = self.get_operand(addr, opcode_data.address_mode);
+            Opcode::RRA =>
+            {
+                let addr = self.get_operand_addr(instruction);
+                let operand = self.get_operand(addr, instruction.address_mode);
 
                 let carry = self.status.contains(StatusFlags::CARRY) as u8;
 
@@ -817,7 +850,7 @@ impl<'a> CPU<'a> {
 
                 self.update_carry_flag(operand & 0b0000_0001 != 0);
 
-                self.write_operand(addr, ror_result, opcode_data.address_mode);
+                self.write_operand(addr, ror_result, instruction.address_mode);
 
                 let carry_in = self.status.contains(StatusFlags::CARRY) as u8;
                 let sum = self.acc as u16 + ror_result as u16 + carry_in as u16;
@@ -828,29 +861,28 @@ impl<'a> CPU<'a> {
                 self.update_negative_flag(result);
 
                 // Overflow flag is set if the sign bit is incorrect (only relevant in signed arithmetic)
-                self.update_overflow_flag(
-                    ((self.acc ^ result) & (ror_result ^ result) & 0x80) != 0,
-                );
+                self.update_overflow_flag(((self.acc ^ result) & (ror_result ^ result) & 0x80) != 0);
 
                 self.acc = result;
             }
-            Instruction::SAX => {
-                let addr = self.get_operand_addr(opcode_data);
+            Opcode::SAX =>
+            {
+                let addr = self.get_operand_addr(instruction);
                 self.write_mem(addr, self.reg_x & self.acc);
             }
-            Instruction::LAX => {
-                let addr = self.get_operand_addr(opcode_data);
-                self.acc = self.get_operand(addr, opcode_data.address_mode);
+            Opcode::LAX =>
+            {
+                let addr = self.get_operand_addr(instruction);
+                self.acc = self.get_operand(addr, instruction.address_mode);
 
                 self.reg_x = self.acc;
                 self.update_negative_flag(self.reg_x);
                 self.update_zero_flag(self.reg_x);
             }
-            Instruction::DCP => {
-                let addr = self.get_operand_addr(opcode_data);
-                let value = self
-                    .get_operand(addr, opcode_data.address_mode)
-                    .wrapping_sub(1);
+            Opcode::DCP =>
+            {
+                let addr = self.get_operand_addr(instruction);
+                let value = self.get_operand(addr, instruction.address_mode).wrapping_sub(1);
 
                 self.write_mem(addr, value);
 
@@ -858,11 +890,10 @@ impl<'a> CPU<'a> {
                 self.update_zero_flag((self.acc as i8 - value as i8) as u8);
                 self.update_negative_flag((self.acc as i8 - value as i8) as u8);
             }
-            Instruction::ISC => {
-                let addr = self.get_operand_addr(opcode_data);
-                let inc_value = self
-                    .get_operand(addr, opcode_data.address_mode)
-                    .wrapping_add(1);
+            Opcode::ISC =>
+            {
+                let addr = self.get_operand_addr(instruction);
+                let inc_value = self.get_operand(addr, instruction.address_mode).wrapping_add(1);
 
                 self.write_mem(addr, inc_value);
 
@@ -875,33 +906,32 @@ impl<'a> CPU<'a> {
                 self.update_zero_flag(result);
                 self.update_negative_flag(result);
 
-                self.update_overflow_flag(
-                    ((self.acc ^ result) & (self.acc ^ inc_value) & 0x80) != 0,
-                );
+                self.update_overflow_flag(((self.acc ^ result) & (self.acc ^ inc_value) & 0x80) != 0);
 
                 self.acc = result;
             }
-            Instruction::SKB => {}
-            _ => {
+            Opcode::SKB =>
+            {}
+            _ =>
+            {
                 panic!("Error: Unknown opcode");
             }
         }
 
-        let updated_cycles = self.update_operand_cycles(opcode_data, does_branch, old_pc)
-            + opcode_data.cycles as u32;
+        let updated_cycles = self.update_operand_cycles(instruction, does_branch, old_pc) + instruction.cycles as u32;
 
-        if update_pc {
-            self.pc += (opcode_data.bytes as u16 - 1);
+        if update_pc
+        {
+            self.pc += (instruction.bytes as u16 - 1);
         }
 
         self.cycles += updated_cycles;
-        self.memory_unit
-            .borrow_mut()
-            .update_ppu_cycles(updated_cycles);
+        self.memory.borrow_mut().update_ppu_cycles(updated_cycles);
     }
 
     fn get_operand(&mut self, addr: u16, address_mode: AddressMode) -> u8 {
-        match address_mode {
+        match address_mode
+        {
             AddressMode::Immediate => self.read_mem(addr),
             AddressMode::Accumulator => self.acc,
             _ => self.read_mem(addr),
@@ -909,7 +939,8 @@ impl<'a> CPU<'a> {
     }
 
     fn write_operand(&mut self, addr: u16, value: u8, address_mode: AddressMode) {
-        match address_mode {
+        match address_mode
+        {
             AddressMode::Accumulator => self.acc = value,
             _ => self.write_mem(addr, value),
         }
@@ -936,7 +967,6 @@ impl<'a> CPU<'a> {
     }
 
     fn update_negative_flag(&mut self, value: u8) {
-        self.status
-            .set(StatusFlags::NEGATIVE, value & 0b1000_0000 != 0);
+        self.status.set(StatusFlags::NEGATIVE, value & 0b10000000 != 0);
     }
 }
