@@ -5,6 +5,7 @@ use bitflags::bitflags;
 use bitflags::Flags;
 
 use frame::Frame;
+use frame::Region;
 use registers::{AddrRegister, PpuCtrl, PpuMask, PpuStatus, ScrollRegister};
 
 use crate::controller::Controller;
@@ -55,7 +56,8 @@ pub struct PPU<'call> {
     oam_addr: u8,
     cycles: u32,
     scanline: u16,
-    nmi_interrupt: u8,
+    frame: Frame,
+    on_nmi: bool,
     callback: Box<dyn FnMut(&mut Frame, &mut Controller) + 'call>,
 
     controller: Rc<RefCell<Controller>>,
@@ -67,6 +69,7 @@ impl<'a> PPU<'a> {
         F: FnMut(&mut Frame, &mut Controller) + 'call,
     {
         PPU {
+            frame: Frame::new(&chr_rom),
             chr_rom,
             palette_table: [0; 32],
             vram: [0; 2048],
@@ -81,15 +84,15 @@ impl<'a> PPU<'a> {
             oam_addr: 0,
             cycles: 0,
             scanline: 0,
-            nmi_interrupt: 0,
+            on_nmi: false,
             controller,
             callback: Box::from(callback),
         }
     }
 
-    pub fn get_nmi(&mut self) -> u8 {
-        let save = self.nmi_interrupt;
-        self.nmi_interrupt = 0;
+    pub fn get_nmi(&mut self) -> bool {
+        let save = self.on_nmi;
+        self.on_nmi = false;
         save
     }
 
@@ -160,7 +163,7 @@ impl<'a> PPU<'a> {
 
                 if !before_nmi_status && self.ctrl_reg.generate_nmi() && self.status_reg.is_vblank()
                 {
-                    self.nmi_interrupt = 1;
+                    self.on_nmi = true;
                 }
             }
             0x2001 => self.mask_reg.update(value),
@@ -209,18 +212,9 @@ impl<'a> PPU<'a> {
 
         match addr
         {
-            0x2000..=0x3eff =>
-            {
-                self.vram[self.mirror_nametable_addr(addr) as usize] = value;
-            }
-            0x3f10 | 0x3f14 | 0x3f18 | 0x3f1c =>
-            {
-                self.palette_table[(addr - 0x10 - 0x3f00) as usize] = value;
-            }
-            0x3f00..=0x3fff =>
-            {
-                self.palette_table[addr as usize - 0x3f00] = value;
-            }
+            0x2000..=0x3eff => self.vram[self.mirror_nametable_addr(addr) as usize] = value,
+            0x3f10 | 0x3f14 | 0x3f18 | 0x3f1c => self.palette_table[(addr - 0x10 - 0x3f00) as usize] = value,
+            0x3f00..=0x3fff => self.palette_table[addr as usize - 0x3f00] = value,
             _ => panic!("Error: Unknown Memory Address {:?}", addr),
         }
 
@@ -238,7 +232,7 @@ impl<'a> PPU<'a> {
     pub fn update_cycles(&mut self, cycles: u32) {
         self.cycles += cycles * 3;
 
-        let old_nmi = self.nmi_interrupt;
+        let old_nmi = self.on_nmi;
 
         if self.cycles >= 341
         {
@@ -257,26 +251,24 @@ impl<'a> PPU<'a> {
 
                 if self.ctrl_reg.generate_nmi()
                 {
-                    self.nmi_interrupt = 1;
+                    self.on_nmi = true;
                 }
             }
 
             if self.scanline >= 262
             {
                 self.scanline = 0;
-                self.nmi_interrupt = 0;
+                self.on_nmi = false;
 
                 self.status_reg.set_sprite_zero_hit(false);
                 self.status_reg.reset_vblank();
             }
         }
 
-        let current_nmi = self.nmi_interrupt;
-
-        if old_nmi == 0 && current_nmi == 1
+        if !old_nmi && self.on_nmi
         {
-            let mut frame = self.render();
-            (self.callback)(&mut frame, &mut *self.controller.borrow_mut());
+            self.render();
+            (self.callback)(&mut self.frame, &mut *self.controller.borrow_mut());
         }
     }
 
@@ -301,54 +293,61 @@ impl<'a> PPU<'a> {
         [self.palette_table[0], self.palette_table[start], self.palette_table[start + 1], self.palette_table[start + 2]]
     }
 
-    pub fn render(&self) -> Frame {
-        let mut bank = self.ctrl_reg.bg_pt() as usize;
-        let nametable_addr = self.ctrl_reg.nametable_addr();
+    fn render_nametable(&mut self, nametable: &Vec<u8>, scroll: (isize, isize), limits: &Region, bank: usize) {
+        let (scroll_x, scroll_y) = scroll;
 
-        let mut scroll_x = self.scroll_reg.scroll_x as isize;
-        let scroll_y = self.scroll_reg.scroll_y as isize;
-
-        let mut new_frame = Frame::new(&self.chr_rom);
-
-        let mut nametable_a = self.vram[0..0x400].to_vec();
-        let mut nametable_b = self.vram[0x400..0x800].to_vec();
-
-        if nametable_addr == 0x2400
-        {
-            nametable_a = self.vram[0x400..0x800].to_vec();
-            nametable_b = self.vram[0..0x400].to_vec();
-        }
-
-        // Handle rendering background tiles
         for i in 0..0x03c0
         {
-            let mut tile_number = nametable_a[i] as usize;
+            let mut tile_number = nametable[i] as usize;
 
             let x = i % 32;
             let y = i / 32;
 
-            let palette = self.bg_palette(x, y, &nametable_a);
+            let palette = self.bg_palette(x, y, &nametable);
 
-            new_frame.copy_bg_tile(bank, tile_number, (x * 8, y * 8), &palette, (scroll_x * -1, scroll_y), (scroll_x as usize, 256));
+            let tile_coords = (x * 8, y * 8);
+
+            self.frame.copy_bg_tile(bank, tile_number, tile_coords, &palette, scroll, limits);
         }
+    }
+
+    pub fn render(&mut self) {
+        let bg_bank = self.ctrl_reg.bg_pt() as usize;
+        let nametable_addr = self.ctrl_reg.nametable_addr();
+
+        let scroll_x = self.scroll_reg.scroll_x as isize;
+        let scroll_y = self.scroll_reg.scroll_y as isize;
+
+        let (nametable_a, nametable_b) = match (nametable_addr, self.mirroring)
+        {
+            (0x2400, MirroringType::Vertical) | (0x2800, MirroringType::Horizontal) => (self.vram[0x400..0x800].to_vec(), self.vram[0..0x400].to_vec()),
+            (0x2000, MirroringType::Vertical) | (0x2000, MirroringType::Horizontal) => (self.vram[0..0x400].to_vec(), self.vram[0x400..0x800].to_vec()),
+            _ => panic!("Error: Invalid combination"),
+        };
+
+        // Handle rendering background tiles
+        let mut scroll = (scroll_x * -1, scroll_y * -1);
+        let mut limits = Region::new(scroll_x as usize, scroll_y as usize, 256, 240);
+
+        self.render_nametable(&nametable_a, scroll, &limits, bg_bank);
 
         if scroll_x != 0
         {
-            for i in 0..0x03c0
-            {
-                let mut tile_number = nametable_b[i] as usize;
+            scroll = (256 - scroll_x, 0);
+            limits = Region::new(0, 0, scroll_x as usize, 240);
 
-                let x = i % 32;
-                let y = i / 32;
+            self.render_nametable(&nametable_b, scroll, &limits, bg_bank);
+        }
+        else if scroll_y != 0
+        {
+            scroll = (0, 240 - scroll_y);
+            limits = Region::new(0, 0, 256, scroll_y as usize);
 
-                let palette = self.bg_palette(x, y, &nametable_b);
-
-                new_frame.copy_bg_tile(bank, tile_number, (x * 8, y * 8), &palette, (256 - scroll_x, scroll_y), (0, scroll_x as usize));
-            }
+            self.render_nametable(&nametable_b, scroll, &limits, bg_bank);
         }
 
         // Handle rendering sprites
-        bank = self.ctrl_reg.sprite_pt() as usize;
+        let sprt_bank = self.ctrl_reg.sprite_pt() as usize;
 
         for i in 0..64
         {
@@ -363,9 +362,7 @@ impl<'a> PPU<'a> {
             let flip_horizonal = attributes.contains(SpriteAttributes::FLIP_HORIZONTAL);
             let flip_vertical = attributes.contains(SpriteAttributes::FLIP_VERTICAL);
 
-            new_frame.copy_sprite_tile(bank, tile_number, (x_pos, y_pos), (flip_horizonal, flip_vertical), &palette);
+            self.frame.copy_sprite_tile(sprt_bank, tile_number, (x_pos, y_pos), (flip_horizonal, flip_vertical), &palette);
         }
-
-        new_frame
     }
 }

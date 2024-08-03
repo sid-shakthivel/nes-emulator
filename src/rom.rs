@@ -21,7 +21,7 @@ bitflags! {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 pub enum MirroringType {
     Vertical,
     Horizontal,

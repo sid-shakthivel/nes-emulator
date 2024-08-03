@@ -1,5 +1,18 @@
 use crate::ppu::palette::SDL_COLOUR_PALLETE;
 
+pub struct Region {
+    x_base: usize,
+    y_base: usize,
+    x_limit: usize,
+    y_limit: usize,
+}
+
+impl Region {
+    pub fn new(x_base: usize, y_base: usize, x_limit: usize, y_limit: usize) -> Region {
+        Region { x_base, y_base, x_limit, y_limit }
+    }
+}
+
 pub struct Frame {
     pub pixels: Vec<u8>,
     chr_rom: Vec<u8>,
@@ -29,7 +42,7 @@ impl Frame {
         self.pixels[base + 2] = rgb.2;
     }
 
-    pub fn copy_bg_tile(&mut self, bank: usize, tile_number: usize, tile_coords: (usize, usize), palette: &[u8; 4], offset: (isize, isize), x_limits: (usize, usize)) {
+    pub fn copy_bg_tile(&mut self, bank: usize, tile_number: usize, tile_coords: (usize, usize), palette: &[u8; 4], offset: (isize, isize), limits: &Region) {
         assert!(bank <= 1);
         let bank = (bank * 0x1000) as usize;
 
@@ -37,7 +50,6 @@ impl Frame {
         let tile_b_offset = tile_a_offset + 8;
 
         let (scroll_x, scroll_y) = offset;
-
         let (tile_x, tile_y) = tile_coords;
 
         for i in (0..8)
@@ -54,13 +66,12 @@ impl Frame {
 
                 let colour = SDL_COLOUR_PALLETE[palette[colour_index as usize] as usize];
 
-                let x_offset = 7 - j;
+                let x_pos_nametable = (7 - j) + tile_x;
+                let y_pos_nametable = i + tile_y;
 
-                let x_value = (x_offset + tile_x);
-
-                if x_value >= x_limits.0 && x_value < x_limits.1
+                if x_pos_nametable >= limits.x_base && x_pos_nametable < limits.x_limit && y_pos_nametable >= limits.y_base && y_pos_nametable < limits.y_limit
                 {
-                    self.set_pixel((x_value as isize + scroll_x) as usize, i + tile_y, colour);
+                    self.set_pixel((x_pos_nametable as isize + scroll_x) as usize, (y_pos_nametable as isize + scroll_y) as usize, colour);
                 }
             }
         }
@@ -88,12 +99,12 @@ impl Frame {
 
                 let colour_index = ((1 & lower_bit) << 1) | (upper_bit & 1);
 
-                let colour = SDL_COLOUR_PALLETE[palette[colour_index as usize] as usize];
-
                 if colour_index == 0
                 {
                     continue;
                 }
+
+                let colour = SDL_COLOUR_PALLETE[palette[colour_index as usize] as usize];
 
                 let x_offset = 7 - j;
 
