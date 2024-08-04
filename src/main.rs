@@ -65,7 +65,7 @@ fn main() {
     let creator = canvas.texture_creator();
     let mut texture = creator.create_texture_target(PixelFormatEnum::RGB24, 256, 240).unwrap();
 
-    // Setup callbackt to display content
+    // Setup callback to display content
     let callback: Box<dyn FnMut(&mut Frame, &mut Controller)> = Box::new(move |frame: &mut Frame, controller: &mut Controller| {
         texture.update(None, &frame.pixels, 256 * 3).unwrap();
 

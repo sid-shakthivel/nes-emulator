@@ -66,8 +66,7 @@ pub struct PPU<'call> {
 impl<'a> PPU<'a> {
     pub fn new<'call, F>(chr_rom: Vec<u8>, mirroring: MirroringType, controller: Rc<RefCell<Controller>>, callback: F) -> PPU<'call>
     where
-        F: FnMut(&mut Frame, &mut Controller) + 'call,
-    {
+        F: FnMut(&mut Frame, &mut Controller) + 'call, {
         PPU {
             frame: Frame::new(&chr_rom),
             chr_rom,

@@ -291,8 +291,7 @@ impl<'a> CPU<'a> {
     }
 
     fn cmp(&mut self, addr_mode: &AddressMode, cmp_value: u8) {
-        let addr = self.get_operand_addr(&addr_mode);
-        let operand = self.get_operand(addr, &addr_mode);
+        let (addr, operand) = self.get_operand(&addr_mode);
 
         self.update_carry_flag(cmp_value >= operand);
         self.update_zero_flag((cmp_value.wrapping_sub(operand)) as u8);
@@ -300,13 +299,24 @@ impl<'a> CPU<'a> {
     }
 
     fn ld(&mut self, addr_mode: &AddressMode) -> u8 {
-        let addr = self.get_operand_addr(&addr_mode);
-        let value = self.get_operand(addr, &addr_mode);
+        let (addr, operand) = self.get_operand(&addr_mode);
+        self.update_zero_and_negative_flags(operand);
+        operand
+    }
 
-        self.update_negative_flag(value);
-        self.update_zero_flag(value);
+    fn upd_acc(&mut self, value: u8) {
+        self.acc = value;
+        self.update_zero_and_negative_flags(self.acc);
+    }
 
-        value
+    fn upd_reg_x(&mut self, value: u8) {
+        self.reg_x = value;
+        self.update_zero_and_negative_flags(self.reg_x);
+    }
+
+    fn upd_reg_y(&mut self, value: u8) {
+        self.reg_y = value;
+        self.update_zero_and_negative_flags(self.reg_y);
     }
 
     pub fn interpret(&mut self) {
@@ -326,32 +336,28 @@ impl<'a> CPU<'a> {
         {
             Opcode::ADC =>
             {
-                let addr = self.get_operand_addr(&addr_mode);
-                let operand = self.get_operand(addr, &addr_mode);
+                let (addr, operand) = self.get_operand(&addr_mode);
 
                 let carry_in = self.status.contains(StatusFlags::CARRY) as u8;
                 let sum = self.acc as u16 + operand as u16 + carry_in as u16;
                 let result = sum as u8;
 
                 self.update_carry_flag(sum > 0xFF);
-                self.update_zero_and_negative_flags(result);
 
                 // Overflow flag is set if the sign bit is incorrect (only relevant in signed arithmetic)
                 self.update_overflow_flag(((self.acc ^ result) & (operand ^ result) & 0x80) != 0);
 
-                self.acc = result;
+                self.upd_acc(result);
             }
             Opcode::AND =>
             {
-                let addr = self.get_operand_addr(&addr_mode);
-                self.acc &= self.get_operand(addr, &addr_mode);
-                self.update_zero_and_negative_flags(self.acc);
+                let (addr, operand) = self.get_operand(&addr_mode);
+                self.upd_acc(self.acc & operand);
             }
             Opcode::ASL =>
             {
                 // Shifts left one bit (* 2)
-                let addr = self.get_operand_addr(&addr_mode);
-                let operand = self.get_operand(addr, &addr_mode);
+                let (addr, operand) = self.get_operand(&addr_mode);
                 let result = operand << 1;
 
                 self.update_carry_flag(operand & 0b10000000 != 0);
@@ -392,43 +398,28 @@ impl<'a> CPU<'a> {
             Opcode::DEC =>
             {
                 let addr = self.get_operand_addr(&addr_mode);
-                let value = self.get_operand(addr, &addr_mode).wrapping_sub(1);
-                self.write_mem(addr, value);
-                self.update_zero_and_negative_flags(value);
+                let (addr, mut operand) = self.get_operand(&addr_mode);
+                operand = operand.wrapping_sub(1);
+                self.write_mem(addr, operand);
+                self.update_zero_and_negative_flags(operand);
             }
-            Opcode::DEX =>
-            {
-                self.reg_x = self.reg_x.wrapping_sub(1);
-                self.update_zero_and_negative_flags(self.reg_x);
-            }
-            Opcode::DEY =>
-            {
-                self.reg_y = self.reg_y.wrapping_sub(1);
-                self.update_zero_and_negative_flags(self.reg_y);
-            }
+            Opcode::DEX => self.upd_reg_x(self.reg_x.wrapping_sub(1)),
+            Opcode::DEY => self.upd_reg_y(self.reg_y.wrapping_sub(1)),
             Opcode::EOR =>
             {
-                let addr = self.get_operand_addr(&addr_mode);
-                self.acc ^= self.get_operand(addr, &addr_mode);
-                self.update_zero_and_negative_flags(self.acc);
+                let (addr, operand) = self.get_operand(&addr_mode);
+                self.upd_acc(self.acc ^ operand);
             }
             Opcode::INC =>
             {
                 let addr = self.get_operand_addr(&addr_mode);
-                let value = self.get_operand(addr, &addr_mode).wrapping_add(1);
-                self.write_mem(addr, value);
-                self.update_zero_and_negative_flags(value);
+                let (addr, mut operand) = self.get_operand(&addr_mode);
+                operand = operand.wrapping_add(1);
+                self.write_mem(addr, operand);
+                self.update_zero_and_negative_flags(operand);
             }
-            Opcode::INX =>
-            {
-                self.reg_x = self.reg_x.wrapping_add(1);
-                self.update_zero_and_negative_flags(self.reg_x);
-            }
-            Opcode::INY =>
-            {
-                self.reg_y = self.reg_y.wrapping_add(1);
-                self.update_zero_and_negative_flags(self.reg_y);
-            }
+            Opcode::INX => self.upd_reg_x(self.reg_x.wrapping_add(1)),
+            Opcode::INY => self.upd_reg_y(self.reg_y.wrapping_add(1)),
             Opcode::JMP =>
             {
                 // Sets program counter to address
@@ -461,7 +452,7 @@ impl<'a> CPU<'a> {
                 // Pushes current program counter to stack and sets program counter to address
                 assert!(instruction.address_mode == AddressMode::Absolute);
 
-                let addr_to_push = self.pc + 1;
+                let addr_to_push = self.pc.wrapping_add(1);
 
                 self.push_stack((addr_to_push >> 8) as u8);
                 self.push_stack((addr_to_push & 0xFF) as u8);
@@ -475,8 +466,7 @@ impl<'a> CPU<'a> {
             Opcode::LDY => self.reg_y = self.ld(&addr_mode),
             Opcode::LSR =>
             {
-                let addr = self.get_operand_addr(&addr_mode);
-                let operand = self.get_operand(addr, &addr_mode);
+                let (addr, operand) = self.get_operand(&addr_mode);
                 let result = operand >> 1;
 
                 self.update_carry_flag(operand & 0b0000_0001 != 0);
@@ -494,11 +484,8 @@ impl<'a> CPU<'a> {
             }
             Opcode::ORA =>
             {
-                let addr = self.get_operand_addr(&addr_mode);
-                let operand = self.get_operand(addr, &addr_mode);
-                self.acc |= operand;
-
-                self.update_zero_and_negative_flags(self.acc);
+                let (addr, operand) = self.get_operand(&addr_mode);
+                self.upd_acc(self.acc | operand);
             }
             Opcode::PHA => self.push_stack(self.acc),
             Opcode::PHP =>
@@ -524,8 +511,7 @@ impl<'a> CPU<'a> {
             }
             Opcode::ROL =>
             {
-                let addr = self.get_operand_addr(&addr_mode);
-                let operand = self.get_operand(addr, &addr_mode);
+                let (addr, operand) = self.get_operand(&addr_mode);
 
                 let old_carry = self.status.contains(StatusFlags::CARRY) as u8;
 
@@ -544,8 +530,7 @@ impl<'a> CPU<'a> {
             }
             Opcode::ROR =>
             {
-                let addr = self.get_operand_addr(&addr_mode);
-                let operand = self.get_operand(addr, &addr_mode);
+                let (addr, operand) = self.get_operand(&addr_mode);
 
                 let carry = self.status.contains(StatusFlags::CARRY) as u8;
 
@@ -573,8 +558,7 @@ impl<'a> CPU<'a> {
             }
             Opcode::SBC =>
             {
-                let addr = self.get_operand_addr(&addr_mode);
-                let operand = self.get_operand(addr, &addr_mode);
+                let (addr, operand) = self.get_operand(&addr_mode);
 
                 let carry_in = self.status.contains(StatusFlags::CARRY) as u8;
                 let value = operand ^ 0xFF;
@@ -607,49 +591,26 @@ impl<'a> CPU<'a> {
                 let addr = self.get_operand_addr(&addr_mode);
                 self.write_mem(addr, self.reg_y);
             }
-            Opcode::TAX =>
-            {
-                self.reg_x = self.acc;
-                self.update_zero_and_negative_flags(self.reg_x);
-            }
-            Opcode::TAY =>
-            {
-                self.reg_y = self.acc;
-                self.update_zero_and_negative_flags(self.reg_y);
-            }
-            Opcode::TSX =>
-            {
-                self.reg_x = self.sp;
-                self.update_zero_and_negative_flags(self.reg_x);
-            }
-            Opcode::TXA =>
-            {
-                self.acc = self.reg_x;
-                self.update_zero_and_negative_flags(self.acc);
-            }
+            Opcode::TAX => self.upd_reg_x(self.acc),
+            Opcode::TAY => self.upd_reg_y(self.acc),
+            Opcode::TSX => self.upd_reg_x(self.sp),
+            Opcode::TXA => self.upd_acc(self.reg_x),
             Opcode::TXS => self.sp = self.reg_x,
-            Opcode::TYA =>
-            {
-                self.acc = self.reg_y;
-                self.update_zero_and_negative_flags(self.acc);
-            }
+            Opcode::TYA => self.upd_acc(self.reg_y),
             Opcode::SLO =>
             {
-                let addr = self.get_operand_addr(&addr_mode);
-                let operand = self.get_operand(addr, &addr_mode);
+                let (addr, operand) = self.get_operand(&addr_mode);
                 let mut result = operand << 1;
 
                 self.write_operand(addr, result, &addr_mode);
                 self.acc |= result;
 
                 self.update_carry_flag(operand & 0b1000_0000 != 0);
-                self.update_zero_flag(result);
-                self.update_negative_flag(result);
+                self.update_zero_and_negative_flags(result);
             }
             Opcode::RLA =>
             {
-                let addr = self.get_operand_addr(&addr_mode);
-                let operand = self.get_operand(addr, &addr_mode);
+                let (addr, operand) = self.get_operand(&addr_mode);
 
                 let carry = self.status.contains(StatusFlags::CARRY) as u8;
                 let result = carry | (operand << 1);
@@ -662,8 +623,7 @@ impl<'a> CPU<'a> {
             }
             Opcode::SRE =>
             {
-                let addr = self.get_operand_addr(&addr_mode);
-                let operand = self.get_operand(addr, &addr_mode);
+                let (addr, operand) = self.get_operand(&addr_mode);
                 let mut result = operand >> 1;
 
                 self.write_operand(addr, result, &addr_mode);
@@ -674,8 +634,7 @@ impl<'a> CPU<'a> {
             }
             Opcode::RRA =>
             {
-                let addr = self.get_operand_addr(&addr_mode);
-                let operand = self.get_operand(addr, &addr_mode);
+                let (addr, operand) = self.get_operand(&addr_mode);
 
                 let carry = self.status.contains(StatusFlags::CARRY) as u8;
 
@@ -702,39 +661,38 @@ impl<'a> CPU<'a> {
             }
             Opcode::LAX =>
             {
-                let addr = self.get_operand_addr(&addr_mode);
-                self.acc = self.get_operand(addr, &addr_mode);
-                self.reg_x = self.acc;
+                let (addr, operand) = self.get_operand(&addr_mode);
 
-                self.update_zero_and_negative_flags(self.reg_x);
+                self.upd_acc(operand);
+                self.reg_x = self.acc;
             }
             Opcode::DCP =>
             {
-                let addr = self.get_operand_addr(&addr_mode);
-                let value = self.get_operand(addr, &addr_mode).wrapping_sub(1);
+                let (addr, mut operand) = self.get_operand(&addr_mode);
+                operand = operand.wrapping_sub(1);
 
-                self.write_mem(addr, value);
+                self.write_mem(addr, operand);
 
-                self.update_carry_flag(self.acc >= value);
-                self.update_zero_and_negative_flags((self.acc as i8 - value as i8) as u8);
+                self.update_carry_flag(self.acc >= operand);
+                self.update_zero_and_negative_flags((self.acc as i8 - operand as i8) as u8);
             }
             Opcode::ISC =>
             {
-                let addr = self.get_operand_addr(&addr_mode);
-                let inc_value = self.get_operand(addr, &addr_mode).wrapping_add(1);
+                // let addr = self.get_operand_addr(&addr_mode);
+                let (addr, mut operand) = self.get_operand(&addr_mode);
+                operand = operand.wrapping_add(1);
 
-                self.write_mem(addr, inc_value);
+                self.write_mem(addr, operand);
 
                 let carry_in = self.status.contains(StatusFlags::CARRY) as u8;
-                let value = inc_value ^ 0xFF;
+                let value = operand ^ 0xFF;
                 let sum = self.acc as u16 + value as u16 + carry_in as u16;
 
                 self.update_carry_flag(sum > 0xFF);
                 let result = sum as u8;
-                self.update_zero_flag(result);
-                self.update_negative_flag(result);
+                self.update_zero_and_negative_flags(result);
 
-                self.update_overflow_flag(((self.acc ^ result) & (self.acc ^ inc_value) & 0x80) != 0);
+                self.update_overflow_flag(((self.acc ^ result) & (self.acc ^ operand) & 0x80) != 0);
 
                 self.acc = result;
             }
@@ -756,12 +714,13 @@ impl<'a> CPU<'a> {
         self.ppu.borrow_mut().update_cycles(cycles);
     }
 
-    fn get_operand(&mut self, addr: u16, addr_mode: &AddressMode) -> u8 {
+    fn get_operand(&mut self, addr_mode: &AddressMode) -> (u16, u8) {
+        let addr = self.get_operand_addr(&addr_mode);
+
         match addr_mode
         {
-            AddressMode::Immediate => self.read_mem(addr),
-            AddressMode::Accumulator => self.acc,
-            _ => self.read_mem(addr),
+            AddressMode::Accumulator => (addr, self.acc),
+            _ => (addr, self.read_mem(addr)),
         }
     }
 
