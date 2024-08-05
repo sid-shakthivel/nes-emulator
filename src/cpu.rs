@@ -164,12 +164,17 @@ impl<'a> CPU<'a> {
             }
             AddressMode::Indirect =>
             {
-                let addr = self.read_mem(self.pc);
+                let mem_addr = self.read_mem_u16(self.pc);
 
-                let lo = self.read_mem(addr as u16);
-                let hi = self.read_mem(addr.wrapping_add(1) as u16);
-
-                (hi as u16) << 8 | (lo as u16)
+                if mem_addr & 0x00FF == 0x00FF 
+                {
+                    let low = self.read_mem(mem_addr as u16);
+                    let high = self.read_mem(mem_addr.wrapping_add(1) as u16);
+    
+                    (high as u16) << 8 | (low as u16)
+                } else {
+                    self.read_mem_u16(mem_addr)
+                }
             }
             AddressMode::IndirectX =>
             {
@@ -319,6 +324,109 @@ impl<'a> CPU<'a> {
         self.update_zero_and_negative_flags(self.reg_y);
     }
 
+    fn ror(&mut self, addr_mode: &AddressMode) -> u8
+    {
+        let (addr, operand) = self.get_operand(&addr_mode);
+
+        let carry = self.status.contains(StatusFlags::CARRY) as u8;
+        let result = (operand >> 1) | (carry << 7);
+
+        self.write_operand(addr, result, &addr_mode);
+        self.update_carry_flag(operand & 1 != 0);
+
+        result
+    }
+
+    fn adc(&mut self, value: u8)
+    {
+        let carry_in = self.status.contains(StatusFlags::CARRY) as u8;
+        let sum = self.acc as u16 + value as u16 + carry_in as u16;
+        let result = sum as u8;
+
+        self.update_carry_flag(sum > 0xFF);
+
+        // Overflow flag is set if the sign bit is incorrect (only relevant in signed arithmetic)
+        self.update_overflow_flag(((self.acc ^ result) & (value ^ result) & 0x80) != 0);
+
+        self.upd_acc(result);
+    }
+
+    fn sbc(&mut self, mut value: u8)
+    {
+        let carry_in = self.status.contains(StatusFlags::CARRY) as u8;
+        value ^= 0xFF;
+        let sum = self.acc as u16 + value as u16 + carry_in as u16;
+        let result = sum as u8;
+
+        self.update_carry_flag(sum > 0xFF);
+        self.update_overflow_flag(((self.acc ^ result) & (self.acc ^ value) & 0x80) != 0);
+
+        self.upd_acc(result);
+    }
+
+    fn lsr(&mut self, value: u8, addr: u16, addr_mode: &AddressMode) -> u8
+    {
+        let result = value >> 1;
+
+        self.update_carry_flag(value & 0b00000001 != 0);
+        self.update_zero_and_negative_flags(result);
+
+        self.write_operand(addr, result, &addr_mode);
+
+        result
+    }
+
+    fn dec(&mut self, addr: u16, mut value: u8) -> u8
+    {
+        value = value.wrapping_sub(1);
+        self.write_mem(addr, value);
+        self.update_zero_and_negative_flags(value);
+
+        value
+    }
+
+    fn inc(&mut self, addr: u16, mut value: u8) -> u8 
+    {
+        value = value.wrapping_add(1);
+        self.write_mem(addr, value);
+        self.update_zero_and_negative_flags(value);
+
+        value
+    }
+
+    fn asl(&mut self, addr_mode: &AddressMode) -> u8
+    {
+        let (addr, operand) = self.get_operand(&addr_mode);
+        let result = operand << 1;
+
+        self.write_operand(addr, result, &addr_mode);
+
+        self.update_carry_flag(operand & 0b10000000 != 0);
+        self.update_zero_and_negative_flags(result);
+
+        result
+    }
+
+    fn rol(&mut self, addr_mode: &AddressMode) -> u8
+    {
+        let (addr, operand) = self.get_operand(&addr_mode);
+        let old_carry = self.status.contains(StatusFlags::CARRY) as u8;
+
+        let result = old_carry | (operand << 1);
+
+        self.write_operand(addr, result, &addr_mode);
+
+        if *addr_mode == AddressMode::Accumulator
+        {
+            self.update_zero_flag(result);
+        }
+
+        self.update_carry_flag(operand >> 7 == 1);
+        self.update_negative_flag(result);
+
+        result
+    }
+
     pub fn interpret(&mut self) {
         let opcode = self.memory.borrow_mut().read_mem(self.pc);
         let instruction = &CPU_OPCODES[opcode as usize];
@@ -337,34 +445,14 @@ impl<'a> CPU<'a> {
             Opcode::ADC =>
             {
                 let (addr, operand) = self.get_operand(&addr_mode);
-
-                let carry_in = self.status.contains(StatusFlags::CARRY) as u8;
-                let sum = self.acc as u16 + operand as u16 + carry_in as u16;
-                let result = sum as u8;
-
-                self.update_carry_flag(sum > 0xFF);
-
-                // Overflow flag is set if the sign bit is incorrect (only relevant in signed arithmetic)
-                self.update_overflow_flag(((self.acc ^ result) & (operand ^ result) & 0x80) != 0);
-
-                self.upd_acc(result);
+                self.adc(operand);
             }
             Opcode::AND =>
             {
                 let (addr, operand) = self.get_operand(&addr_mode);
                 self.upd_acc(self.acc & operand);
             }
-            Opcode::ASL =>
-            {
-                // Shifts left one bit (* 2)
-                let (addr, operand) = self.get_operand(&addr_mode);
-                let result = operand << 1;
-
-                self.update_carry_flag(operand & 0b10000000 != 0);
-                self.update_zero_and_negative_flags(result);
-
-                self.write_operand(addr, result, &addr_mode);
-            }
+            Opcode::ASL => { self.asl(&addr_mode); },
             Opcode::BCC => self.branch(&addr_mode, !self.status.contains(StatusFlags::CARRY)),
             Opcode::BCS => self.branch(&addr_mode, self.status.contains(StatusFlags::CARRY)),
             Opcode::BEQ => self.branch(&addr_mode, self.status.contains(StatusFlags::ZERO)),
@@ -397,11 +485,8 @@ impl<'a> CPU<'a> {
             Opcode::CPY => self.cmp(&addr_mode, self.reg_y),
             Opcode::DEC =>
             {
-                let addr = self.get_operand_addr(&addr_mode);
                 let (addr, mut operand) = self.get_operand(&addr_mode);
-                operand = operand.wrapping_sub(1);
-                self.write_mem(addr, operand);
-                self.update_zero_and_negative_flags(operand);
+                self.dec(addr, operand);
             }
             Opcode::DEX => self.upd_reg_x(self.reg_x.wrapping_sub(1)),
             Opcode::DEY => self.upd_reg_y(self.reg_y.wrapping_sub(1)),
@@ -412,39 +497,14 @@ impl<'a> CPU<'a> {
             }
             Opcode::INC =>
             {
-                let addr = self.get_operand_addr(&addr_mode);
                 let (addr, mut operand) = self.get_operand(&addr_mode);
-                operand = operand.wrapping_add(1);
-                self.write_mem(addr, operand);
-                self.update_zero_and_negative_flags(operand);
+                self.inc(addr, operand);
             }
             Opcode::INX => self.upd_reg_x(self.reg_x.wrapping_add(1)),
             Opcode::INY => self.upd_reg_y(self.reg_y.wrapping_add(1)),
             Opcode::JMP =>
             {
-                // Sets program counter to address
-                if addr_mode == AddressMode::Indirect
-                {
-                    let mem_addr = self.read_mem_u16(self.pc);
-
-                    let indirect_ref = if mem_addr & 0x00FF == 0x00FF
-                    {
-                        let low = self.read_mem(mem_addr);
-                        let high = self.read_mem(mem_addr & 0xFF00);
-                        (high as u16) << 8 | (low as u16)
-                    }
-                    else
-                    {
-                        self.read_mem_u16(mem_addr)
-                    };
-
-                    self.pc = indirect_ref;
-                }
-                else if addr_mode == AddressMode::Absolute
-                {
-                    self.pc = self.get_operand_addr(&addr_mode);
-                }
-
+                self.pc = self.get_operand_addr(&addr_mode);
                 update_pc = false;
             }
             Opcode::JSR =>
@@ -467,12 +527,7 @@ impl<'a> CPU<'a> {
             Opcode::LSR =>
             {
                 let (addr, operand) = self.get_operand(&addr_mode);
-                let result = operand >> 1;
-
-                self.update_carry_flag(operand & 0b0000_0001 != 0);
-                self.update_zero_and_negative_flags(result);
-
-                self.write_operand(addr, result, &addr_mode);
+                self.lsr(operand, addr, &addr_mode);
             }
             Opcode::NOP =>
             {
@@ -509,36 +564,10 @@ impl<'a> CPU<'a> {
                 self.status.remove(StatusFlags::B_FLAG);
                 self.status.insert(StatusFlags::UNUSED);
             }
-            Opcode::ROL =>
-            {
-                let (addr, operand) = self.get_operand(&addr_mode);
-
-                let old_carry = self.status.contains(StatusFlags::CARRY) as u8;
-
-                self.update_carry_flag(operand >> 7 == 1);
-
-                let result = old_carry | (operand << 1);
-
-                self.write_operand(addr, result, &addr_mode);
-
-                if addr_mode == AddressMode::Accumulator
-                {
-                    self.update_zero_flag(result);
-                }
-
-                self.update_negative_flag(result);
-            }
+            Opcode::ROL => { self.rol(&addr_mode); },
             Opcode::ROR =>
             {
-                let (addr, operand) = self.get_operand(&addr_mode);
-
-                let carry = self.status.contains(StatusFlags::CARRY) as u8;
-
-                self.update_carry_flag(operand & 1 != 0);
-
-                let result = (operand >> 1) | (carry << 7);
-
-                self.write_operand(addr, result, &addr_mode);
+                let result = self.ror(&addr_mode);
                 self.update_negative_flag(result);
             }
             Opcode::RTI =>
@@ -559,19 +588,7 @@ impl<'a> CPU<'a> {
             Opcode::SBC =>
             {
                 let (addr, operand) = self.get_operand(&addr_mode);
-
-                let carry_in = self.status.contains(StatusFlags::CARRY) as u8;
-                let value = operand ^ 0xFF;
-                let sum = self.acc as u16 + value as u16 + carry_in as u16;
-
-                self.update_carry_flag(sum > 0xFF);
-                let result = sum as u8;
-                self.update_zero_flag(result);
-                self.update_negative_flag(result);
-
-                self.update_overflow_flag(((self.acc ^ result) & (self.acc ^ operand) & 0x80) != 0);
-
-                self.acc = result;
+                self.sbc(operand);
             }
             Opcode::SEC => self.update_carry_flag(true),
             Opcode::SED => self.update_decimal_flag(true),
@@ -599,60 +616,26 @@ impl<'a> CPU<'a> {
             Opcode::TYA => self.upd_acc(self.reg_y),
             Opcode::SLO =>
             {
-                let (addr, operand) = self.get_operand(&addr_mode);
-                let mut result = operand << 1;
-
-                self.write_operand(addr, result, &addr_mode);
+                let result = self.asl(&addr_mode);
                 self.acc |= result;
-
-                self.update_carry_flag(operand & 0b1000_0000 != 0);
                 self.update_zero_and_negative_flags(result);
             }
             Opcode::RLA =>
             {
-                let (addr, operand) = self.get_operand(&addr_mode);
-
-                let carry = self.status.contains(StatusFlags::CARRY) as u8;
-                let result = carry | (operand << 1);
-
-                self.write_operand(addr, result, &addr_mode);
+                let result = self.rol(&addr_mode);
                 self.acc &= result;
-
-                self.update_carry_flag(operand >> 7 == 1);
-                self.update_negative_flag(result);
             }
             Opcode::SRE =>
             {
                 let (addr, operand) = self.get_operand(&addr_mode);
-                let mut result = operand >> 1;
+                let result = self.lsr(operand, addr, &addr_mode);
 
-                self.write_operand(addr, result, &addr_mode);
                 self.acc ^= result;
-
-                self.update_carry_flag(operand & 0b0000_0001 != 0);
-                self.update_zero_and_negative_flags(result);
             }
             Opcode::RRA =>
             {
-                let (addr, operand) = self.get_operand(&addr_mode);
-
-                let carry = self.status.contains(StatusFlags::CARRY) as u8;
-
-                let ror_result = (operand >> 1) | (carry << 7);
-
-                self.update_carry_flag(operand & 0b0000_0001 != 0);
-
-                self.write_operand(addr, ror_result, &addr_mode);
-
-                let carry_in = self.status.contains(StatusFlags::CARRY) as u8;
-                let sum = self.acc as u16 + ror_result as u16 + carry_in as u16;
-                let result = sum as u8;
-
-                self.acc = result;
-
-                self.update_carry_flag(sum > 0xFF);
-                self.update_zero_and_negative_flags(result);
-                self.update_overflow_flag(((self.acc ^ result) & (ror_result ^ result) & 0x80) != 0);
+                let ror_result = self.ror(&addr_mode);
+                self.adc(ror_result);
             }
             Opcode::SAX =>
             {
@@ -669,34 +652,18 @@ impl<'a> CPU<'a> {
             Opcode::DCP =>
             {
                 let (addr, mut operand) = self.get_operand(&addr_mode);
-                operand = operand.wrapping_sub(1);
+                let result = self.dec(addr, operand);
 
-                self.write_mem(addr, operand);
-
-                self.update_carry_flag(self.acc >= operand);
-                self.update_zero_and_negative_flags((self.acc as i8 - operand as i8) as u8);
+                self.update_carry_flag(self.acc >= result);
+                self.update_zero_and_negative_flags((self.acc as i8 - result as i8) as u8);
             }
             Opcode::ISC =>
             {
-                // let addr = self.get_operand_addr(&addr_mode);
                 let (addr, mut operand) = self.get_operand(&addr_mode);
-                operand = operand.wrapping_add(1);
-
-                self.write_mem(addr, operand);
-
-                let carry_in = self.status.contains(StatusFlags::CARRY) as u8;
-                let value = operand ^ 0xFF;
-                let sum = self.acc as u16 + value as u16 + carry_in as u16;
-
-                self.update_carry_flag(sum > 0xFF);
-                let result = sum as u8;
-                self.update_zero_and_negative_flags(result);
-
-                self.update_overflow_flag(((self.acc ^ result) & (self.acc ^ operand) & 0x80) != 0);
-
-                self.acc = result;
+                let result = self.inc(addr, operand);
+                self.sbc(result);
             }
-            _ => panic!("Error: Unknown opcode"),
+            _ => panic!("Error: Unknown Opcode"),
         }
 
         let updated_cycles = self.update_operand_cycles(instruction, old_pc) + instruction.cycles as u32;
